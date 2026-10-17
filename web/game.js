@@ -978,20 +978,26 @@
     return (data && typeof data === "object") ? data : {};
   }
 
+  // 调用方要能区分"根本没联系上后端"（离线/HTTP 非 2xx/响应解析失败，
+  // 用 networkError:true 标记）和"后端正常响应了，但函数自己判定 ok:false"
+  // 两种情况——前者该提示"未能连接排行榜"，后者该照着函数返回的 reason
+  // 显示具体原因（比如 finish_run 的 invalid_run），不能混在一起说成同一
+  // 句"未能连接排行榜，成绩未上传"（见第三轮审核）。
   function rpcPost(name, body, keepalive) {
-    if (!backendConfigured) return Promise.resolve({ ok: false });
+    if (!backendConfigured) return Promise.resolve({ ok: false, networkError: true });
     var fetchOpts = { method: "POST", headers: restHeaders(), body: JSON.stringify(body) };
     if (keepalive) fetchOpts.keepalive = true;
     return fetch(restUrl("/rest/v1/rpc/" + name), fetchOpts)
       .then(function (res) {
-        if (!res.ok) return { ok: false };
+        if (!res.ok) return { ok: false, networkError: true };
         return res.json().then(function (data) {
           var row = unwrapRpcResult(data);
           row.ok = row.ok !== false;
+          row.networkError = false;
           return row;
-        }).catch(function () { return { ok: true }; });
+        }).catch(function () { return { ok: false, networkError: true }; });
       })
-      .catch(function () { return { ok: false }; });
+      .catch(function () { return { ok: false, networkError: true }; });
   }
 
   function restGet(path) {
@@ -1063,8 +1069,24 @@
       p_final_catches: catches,
       p_duration_seconds: Math.round(elapsedPlayTime)
     }).then(function (res) {
-      if (res.ok && res.rank != null) dom.resultRankStatus.textContent = "你是第 " + res.rank + " 名！";
-      else dom.resultRankStatus.textContent = "未能连接排行榜，成绩未上传";
+      if (res.networkError) {
+        // 真的没联系上后端（离线/HTTP 错误/响应解析失败），这局确实没有
+        // 上传成功。
+        dom.resultRankStatus.textContent = "未能连接排行榜，成绩未上传";
+      } else if (res.ok && res.rank != null) {
+        if (res.adjusted) {
+          // 服务端没采信这次提交的数字，改用最后一次被接受心跳的状态结算，
+          // 但确实已经写进了排行榜——不能说"未上传"，要说清楚结算的是
+          // 哪个分数。
+          dom.resultRankStatus.textContent = "成绩已按服务器记录结算：" + res.final_score + " 分，你是第 " + res.rank + " 名！";
+        } else {
+          dom.resultRankStatus.textContent = "你是第 " + res.rank + " 名！";
+        }
+      } else {
+        // 后端正常响应了，只是这次调用本身被判定无效（比如 invalid_run），
+        // 不是网络问题，不应该说成"未能连接排行榜"。
+        dom.resultRankStatus.textContent = "本局成绩未被接受";
+      }
     });
   }
 
