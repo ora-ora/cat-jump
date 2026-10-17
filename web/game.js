@@ -922,4 +922,201 @@
     }
   }
 
+  // =======================================================================
+  // Leaderboard client（第 9 节；SUPABASE_URL/KEY 未配置或请求失败时全部静默降级）
+  // =======================================================================
+
+  var backendConfigured = !!(SUPABASE_URL && SUPABASE_ANON_KEY);
+
+  function getClientId() {
+    var id = storageGet("catmouse_client_id", "");
+    if (id) return id;
+    try {
+      id = (window.crypto && window.crypto.randomUUID) ? window.crypto.randomUUID() : null;
+    } catch (e) { id = null; }
+    if (!id) id = "c-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2);
+    storageSet("catmouse_client_id", id);
+    return id;
+  }
+
+  var clientId = getClientId();
+  var run = { id: null, seq: 0, lastSentAt: 0, lastSentScore: -1, offline: !backendConfigured };
+
+  function restUrl(path) { return SUPABASE_URL.replace(/\/$/, "") + path; }
+
+  function restHeaders() {
+    return {
+      apikey: SUPABASE_ANON_KEY,
+      Authorization: "Bearer " + SUPABASE_ANON_KEY,
+      "Content-Type": "application/json"
+    };
+  }
+
+  function unwrapRpcResult(data) {
+    if (Array.isArray(data)) data = data[0];
+    return (data && typeof data === "object") ? data : {};
+  }
+
+  function rpcPost(name, body, keepalive) {
+    if (!backendConfigured) return Promise.resolve({ ok: false });
+    var fetchOpts = { method: "POST", headers: restHeaders(), body: JSON.stringify(body) };
+    if (keepalive) fetchOpts.keepalive = true;
+    return fetch(restUrl("/rest/v1/rpc/" + name), fetchOpts)
+      .then(function (res) {
+        if (!res.ok) return { ok: false };
+        return res.json().then(function (data) {
+          var row = unwrapRpcResult(data);
+          row.ok = row.ok !== false;
+          return row;
+        }).catch(function () { return { ok: true }; });
+      })
+      .catch(function () { return { ok: false }; });
+  }
+
+  function restGet(path) {
+    if (!backendConfigured) return Promise.resolve({ ok: false, rows: [] });
+    return fetch(restUrl(path), { method: "GET", headers: restHeaders() })
+      .then(function (res) {
+        if (!res.ok) return { ok: false, rows: [] };
+        return res.json().then(function (rows) { return { ok: true, rows: rows || [] }; });
+      })
+      .catch(function () { return { ok: false, rows: [] }; });
+  }
+
+  function startRun(nickname) {
+    run.id = null; run.seq = 0; run.lastSentAt = 0; run.lastSentScore = -1;
+    run.offline = !backendConfigured;
+    if (!backendConfigured) return;
+    rpcPost("start_run", { p_client_id: clientId, p_nickname: nickname || "" }).then(function (res) {
+      if (res.ok && res.run_id != null) run.id = res.run_id;
+      else run.offline = true;
+    });
+  }
+
+  function heartbeatPayload(playStatus) {
+    run.seq += 1;
+    return {
+      p_run_id: run.id,
+      p_client_id: clientId,
+      p_seq: run.seq,
+      p_play_status: playStatus,
+      p_score: score,
+      p_catches: catches,
+      p_catches_grey: catchesGrey,
+      p_catches_brown: catchesBrown,
+      p_catches_gold: catchesGold,
+      p_combo_max: comboMax,
+      p_elapsed_seconds: elapsedPlayTime,
+      p_client_ts: new Date().toISOString()
+    };
+  }
+
+  function maybeSendHeartbeat(now) {
+    if (run.id == null || run.offline) return;
+    var since = now - run.lastSentAt;
+    if (since < HEARTBEAT_MIN_INTERVAL_MS) return;
+    var dueInterval;
+    if (state === STATE_PAUSE) dueInterval = HEARTBEAT_PAUSED_INTERVAL_MS;
+    else dueInterval = (score !== run.lastSentScore) ? HEARTBEAT_ACTIVE_INTERVAL_MS : HEARTBEAT_IDLE_INTERVAL_MS;
+    if (since < dueInterval) return;
+    run.lastSentAt = now;
+    run.lastSentScore = score;
+    rpcPost("heartbeat", heartbeatPayload(state === STATE_PAUSE ? "paused" : "playing"));
+  }
+
+  function finishRun() {
+    if (!backendConfigured) { dom.resultRankStatus.textContent = "排行榜未配置"; return; }
+    if (run.offline || run.id == null) { dom.resultRankStatus.textContent = "未能连接排行榜，成绩未上传"; return; }
+    rpcPost("finish_run", {
+      p_run_id: run.id,
+      p_client_id: clientId,
+      p_final_score: score,
+      p_final_catches: catches,
+      p_duration_seconds: Math.round(elapsedPlayTime)
+    }).then(function (res) {
+      if (res.ok && res.rank != null) dom.resultRankStatus.textContent = "你是第 " + res.rank + " 名！";
+      else dom.resultRankStatus.textContent = "未能连接排行榜，成绩未上传";
+    });
+  }
+
+  window.addEventListener("pagehide", function () {
+    if (!backendConfigured || run.offline || run.id == null) return;
+    try {
+      fetch(restUrl("/rest/v1/rpc/finish_run"), {
+        method: "POST",
+        keepalive: true,
+        headers: restHeaders(),
+        body: JSON.stringify({
+          p_run_id: run.id,
+          p_client_id: clientId,
+          p_final_score: score,
+          p_final_catches: catches,
+          p_duration_seconds: Math.round(elapsedPlayTime)
+        })
+      });
+    } catch (e) { /* 页面即将卸载，发送失败也无法补救 */ }
+  });
+
+  var leaderboardSnapshot = [];
+  var leaderboardSnapshotAt = 0;
+
+  function estimateRank(sortedDesc, myScore) {
+    var lo = 0, hi = sortedDesc.length;
+    while (lo < hi) {
+      var mid = (lo + hi) >> 1;
+      if (sortedDesc[mid] < myScore) hi = mid; else lo = mid + 1;
+    }
+    return lo + 1;
+  }
+
+  function applySnapshotToHud() {
+    if (!backendConfigured || leaderboardSnapshot.length === 0) { dom.rankText.textContent = "排名：--"; return; }
+    var rank = estimateRank(leaderboardSnapshot, score);
+    dom.rankText.textContent = rank > leaderboardSnapshot.length
+      ? ("排名：" + leaderboardSnapshot.length + "+ 名")
+      : ("当前约第 " + rank + " 名");
+  }
+
+  function refreshSnapshotIfDue(now) {
+    if (!backendConfigured) return;
+    if (leaderboardSnapshotAt !== 0 && now - leaderboardSnapshotAt < LEADERBOARD_POLL_INTERVAL_MS) return;
+    leaderboardSnapshotAt = now;
+    restGet("/rest/v1/leaderboard_live?select=display_score&order=display_score.desc&limit=" + LEADERBOARD_SNAPSHOT_LIMIT)
+      .then(function (res) {
+        if (!res.ok) return;
+        leaderboardSnapshot = res.rows.map(function (r) { return r.display_score; }).sort(function (a, b) { return b - a; });
+        if (state === STATE_PLAY) applySnapshotToHud();
+      });
+  }
+
+  function escapeHtml(str) {
+    return String(str).replace(/[&<>"']/g, function (c) {
+      return ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c];
+    });
+  }
+
+  function loadTopScores() {
+    dom.leaderboardList.innerHTML = '<div class="lb-loading">加载中…</div>';
+    if (!backendConfigured) {
+      dom.leaderboardList.innerHTML = '<div class="lb-error">排行榜未配置</div>';
+      return;
+    }
+    restGet("/rest/v1/leaderboard_live?select=nickname,display_score,is_live,is_paused&order=display_score.desc&limit=" + LEADERBOARD_TOPN_LIMIT)
+      .then(function (res) {
+        if (!res.ok) { dom.leaderboardList.innerHTML = '<div class="lb-error">暂时无法连接排行榜</div>'; return; }
+        if (res.rows.length === 0) { dom.leaderboardList.innerHTML = '<div class="lb-empty">还没有人上榜，来当第一个吧！</div>'; return; }
+        var html = "";
+        for (var i = 0; i < res.rows.length; i++) {
+          var row = res.rows[i];
+          var badge = "";
+          if (row.is_live) badge = '<span class="lb-badge live">游戏中</span>';
+          else if (row.is_paused) badge = '<span class="lb-badge paused">已暂停</span>';
+          html += '<div class="lb-row"><span class="lb-rank">' + (i + 1) + '</span>' +
+            '<span class="lb-name">' + escapeHtml(row.nickname || "匿名猫") + '</span>' +
+            badge + '<span class="lb-score">' + row.display_score + '</span></div>';
+        }
+        dom.leaderboardList.innerHTML = html;
+      });
+  }
+
 })();
