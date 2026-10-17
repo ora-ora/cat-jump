@@ -1119,4 +1119,225 @@
       });
   }
 
+  // =======================================================================
+  // Game state & UI wiring
+  // =======================================================================
+
+  var state = STATE_START;
+
+  var dom = {
+    hud: document.getElementById("hud"),
+    scoreText: document.getElementById("scoreText"),
+    comboText: document.getElementById("comboText"),
+    rankText: document.getElementById("rankText"),
+    pauseBtn: document.getElementById("pauseBtn"),
+    muteBtn: document.getElementById("muteBtn"),
+    endRunBtn: document.getElementById("endRunBtn"),
+    startScreen: document.getElementById("startScreen"),
+    bestScoreStart: document.getElementById("bestScoreStart"),
+    nicknameInput: document.getElementById("nicknameInput"),
+    startBtn: document.getElementById("startBtn"),
+    showLeaderboardBtnStart: document.getElementById("showLeaderboardBtnStart"),
+    pauseScreen: document.getElementById("pauseScreen"),
+    resumeBtn: document.getElementById("resumeBtn"),
+    confirmEndScreen: document.getElementById("confirmEndScreen"),
+    confirmEndYesBtn: document.getElementById("confirmEndYesBtn"),
+    confirmEndNoBtn: document.getElementById("confirmEndNoBtn"),
+    resultScreen: document.getElementById("resultScreen"),
+    resultScore: document.getElementById("resultScore"),
+    resultCatches: document.getElementById("resultCatches"),
+    resultDuration: document.getElementById("resultDuration"),
+    resultCombo: document.getElementById("resultCombo"),
+    resultBest: document.getElementById("resultBest"),
+    resultRankStatus: document.getElementById("resultRankStatus"),
+    nicknameInputResult: document.getElementById("nicknameInputResult"),
+    showLeaderboardBtnResult: document.getElementById("showLeaderboardBtnResult"),
+    restartBtn: document.getElementById("restartBtn"),
+    homeBtn: document.getElementById("homeBtn"),
+    leaderboardScreen: document.getElementById("leaderboardScreen"),
+    leaderboardList: document.getElementById("leaderboardList"),
+    leaderboardCloseBtn: document.getElementById("leaderboardCloseBtn")
+  };
+
+  var best = parseInt(storageGet("catmouse_best", "0"), 10) || 0;
+
+  function updateMuteBtn() { dom.muteBtn.textContent = muted ? "🔇" : "🔊"; }
+  updateMuteBtn();
+
+  function showScreen(el) { el.classList.remove("hidden"); }
+  function hideScreen(el) { el.classList.add("hidden"); }
+
+  function enterStart() {
+    state = STATE_START;
+    hideScreen(dom.hud);
+    hideScreen(dom.pauseScreen);
+    hideScreen(dom.resultScreen);
+    hideScreen(dom.confirmEndScreen);
+    dom.bestScoreStart.textContent = String(best);
+    dom.nicknameInput.value = storageGet("catmouse_nickname", "");
+    showScreen(dom.startScreen);
+  }
+
+  function beginRun() {
+    ensureAudio();
+    var nickname = dom.nicknameInput.value.trim();
+    storageSet("catmouse_nickname", nickname);
+    hideScreen(dom.startScreen);
+    showScreen(dom.hud);
+    resetWorld();
+    resetScoring();
+    dom.comboText.classList.add("hidden");
+    dom.rankText.textContent = "排名：--";
+    state = STATE_PLAY;
+    startRun(nickname);
+  }
+
+  function requestEndRun() {
+    if (state !== STATE_PLAY) return;
+    sfx.click();
+    showScreen(dom.confirmEndScreen);
+  }
+
+  function confirmEndRun() {
+    hideScreen(dom.confirmEndScreen);
+    enterResult();
+  }
+
+  function cancelEndRun() { hideScreen(dom.confirmEndScreen); }
+
+  function enterPause() {
+    if (state !== STATE_PLAY) return;
+    state = STATE_PAUSE;
+    showScreen(dom.pauseScreen);
+  }
+
+  function resumePlay() {
+    if (state !== STATE_PAUSE) return;
+    state = STATE_PLAY;
+    hideScreen(dom.pauseScreen);
+  }
+
+  function enterResult() {
+    state = STATE_RESULT;
+    hideScreen(dom.hud);
+    if (score > best) { best = score; storageSet("catmouse_best", String(best)); }
+    dom.resultScore.textContent = String(score);
+    dom.resultCatches.textContent = String(catches);
+    dom.resultDuration.textContent = String(Math.round(elapsedPlayTime));
+    dom.resultCombo.textContent = String(comboMax);
+    dom.resultBest.textContent = String(best);
+    dom.resultRankStatus.textContent = "结算中…";
+    dom.nicknameInputResult.value = storageGet("catmouse_nickname", "");
+    showScreen(dom.resultScreen);
+    sfx.endRun();
+    finishRun();
+  }
+
+  function openLeaderboard() {
+    sfx.click();
+    showScreen(dom.leaderboardScreen);
+    loadTopScores();
+  }
+
+  document.addEventListener("visibilitychange", function () {
+    if (document.hidden && state === STATE_PLAY) enterPause();
+  });
+
+  dom.startBtn.addEventListener("click", beginRun);
+  dom.pauseBtn.addEventListener("click", function () { sfx.click(); enterPause(); });
+  dom.resumeBtn.addEventListener("click", function () { sfx.click(); resumePlay(); });
+  dom.muteBtn.addEventListener("click", function () { ensureAudio(); toggleMute(); });
+  dom.endRunBtn.addEventListener("click", requestEndRun);
+  dom.confirmEndYesBtn.addEventListener("click", confirmEndRun);
+  dom.confirmEndNoBtn.addEventListener("click", cancelEndRun);
+  dom.restartBtn.addEventListener("click", function () { hideScreen(dom.resultScreen); beginRun(); });
+  dom.homeBtn.addEventListener("click", function () { hideScreen(dom.resultScreen); enterStart(); });
+  dom.nicknameInputResult.addEventListener("change", function () {
+    storageSet("catmouse_nickname", dom.nicknameInputResult.value.trim());
+  });
+  dom.showLeaderboardBtnStart.addEventListener("click", openLeaderboard);
+  dom.showLeaderboardBtnResult.addEventListener("click", openLeaderboard);
+  dom.leaderboardCloseBtn.addEventListener("click", function () { hideScreen(dom.leaderboardScreen); });
+
+  // =======================================================================
+  // Main loop
+  // =======================================================================
+
+  function updateHud() {
+    dom.scoreText.textContent = String(score);
+    if (combo >= 2) {
+      dom.comboText.classList.remove("hidden");
+      dom.comboText.textContent = "连击 x" + combo;
+    } else {
+      dom.comboText.classList.add("hidden");
+    }
+  }
+
+  function update(dt) {
+    if (state === STATE_PLAY) {
+      elapsedPlayTime += dt;
+      updateCat(dt);
+      updateCamera(dt);
+      ensureChunksAround(camera.x, camera.y);
+      pruneFarChunks(dt, camera.x, camera.y);
+      updateMice(dt);
+      trySpawnMouse();
+      updateComboTimer(dt);
+      updateEffects(dt);
+      updateHud();
+      refreshSnapshotIfDue(Date.now());
+      maybeSendHeartbeat(Date.now());
+    } else if (state === STATE_PAUSE) {
+      maybeSendHeartbeat(Date.now());
+    }
+  }
+
+  var idleRunCycle = 0;
+  function drawIdleScene() {
+    ctx.fillStyle = "#8fcf6b";
+    ctx.fillRect(0, 0, W, H);
+    idleRunCycle += 0.016;
+    drawQuadruped(W / 2, H / 2 + s(20), s(CAT_RADIUS), Math.sin(idleRunCycle * 0.3) * 0.6, idleRunCycle, "#ff9d5c", "#ffb27a", 0);
+  }
+
+  function draw() {
+    if (state === STATE_START) { drawIdleScene(); return; }
+    drawBackground();
+    drawObstacles();
+    drawMice();
+    drawCat();
+    drawEffects();
+  }
+
+  var lastFrameTime = null;
+  function frame(now) {
+    if (lastFrameTime == null) lastFrameTime = now;
+    var dt = Math.min(0.05, (now - lastFrameTime) / 1000);
+    lastFrameTime = now;
+    update(dt);
+    draw();
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+
+  enterStart();
+
+  // =======================================================================
+  // Debug hook（只读，供自动化测试使用，不影响正常游戏逻辑）
+  // =======================================================================
+
+  window.__catDebug = {
+    get state() { return state; },
+    get cat() { return { x: cat.x, y: cat.y, vx: cat.vx, vy: cat.vy }; },
+    get camera() { return { x: camera.x, y: camera.y }; },
+    get mice() { return mice.map(function (m) { return { x: m.x, y: m.y, type: m.type, state: m.state }; }); },
+    get score() { return score; },
+    get combo() { return combo; },
+    get chunkCount() { return chunkCache.size; },
+    get rankText() { return dom.rankText.textContent; },
+    forceSpawnMouseNear: function (dx, dy, type) {
+      spawnMouseAt(cat.x + (dx || 0), cat.y + (dy || 0), type || "grey", currentDifficulty());
+    }
+  };
+
 })();
