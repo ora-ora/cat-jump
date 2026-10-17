@@ -30,9 +30,7 @@ declare
   v_last_server_ts timestamptz;
   v_flags text[] := '{}';
   v_play_status text;
-  -- 金老鼠满难度分值(约75) × 连击倍率上限(3) / 理论最快连续捕获间隔(0.15s)
-  -- 量级，留出余量取整为常量，实现阶段可按实际数值重新核算。
-  v_max_score_per_sec numeric := 60;
+  v_max_score_per_sec numeric := game_max_score_per_sec();
 begin
   select * into v_run from runs where id = p_run_id and client_id = p_client_id;
   if v_run.id is null or v_run.status <> 'in_progress' then

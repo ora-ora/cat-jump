@@ -15,13 +15,21 @@ declare
   v_started_at timestamptz;
   v_recent_count integer;
 begin
-  -- 昵称过滤：只去掉控制字符、裁剪长度，为空则回退为默认昵称；不会因为昵称问题拒绝开局。
-  v_nickname := regexp_replace(coalesce(p_nickname, ''), '[[:cntrl:]]', '', 'g');
-  v_nickname := btrim(v_nickname);
+  -- 昵称过滤：白名单只保留 ASCII 字母数字、CJK 统一表意文字（用显式码点范围
+  -- 一(U+4E00)-鿿(U+9FFF)，而不是 [:alpha:]/[:alnum:]——后者在某些 locale/
+  -- ctype 下是否识别中文不确定，显式范围不依赖 locale，行为确定）、空格、
+  -- 下划线、短横线；折叠连续空白；截断到 12 字符；命中敏感词/仿冒管理员类
+  -- 关键词子串黑名单则整体回退默认昵称（这不是完善的内容审核，只是兜底）；
+  -- 结果为空同样回退默认昵称。不会因为昵称问题拒绝开局。
+  v_nickname := regexp_replace(coalesce(p_nickname, ''), '[^a-zA-Z0-9_ 一-鿿-]', '', 'g');
+  v_nickname := btrim(regexp_replace(v_nickname, '\s+', ' ', 'g'));
+  v_nickname := left(v_nickname, 12);
+  if v_nickname ~* '(傻x|傻逼|白痴|管理员|客服|官方|admin|system|supabase)' then
+    v_nickname := '';
+  end if;
   if v_nickname = '' then
     v_nickname := '匿名猫' || floor(random() * 10000)::int;
   end if;
-  v_nickname := left(v_nickname, 12);
 
   select * into v_existing
   from runs

@@ -988,8 +988,16 @@
     run.offline = !backendConfigured;
     if (!backendConfigured) return;
     rpcPost("start_run", { p_client_id: clientId, p_nickname: nickname || "" }).then(function (res) {
-      if (res.ok && res.run_id != null) run.id = res.run_id;
-      else run.offline = true;
+      if (res.ok && res.run_id != null) {
+        run.id = res.run_id;
+        // 服务端在插入 runs 行时就把 last_heartbeat_at 设成了 start_run 那一刻，
+        // 这里把 lastSentAt 也对齐到"现在"，让 maybeSendHeartbeat 的最小间隔
+        // 节流从这一刻起算，否则第一次心跳几乎立刻发出，会被服务端的
+        // "两次心跳间隔 < 2 秒"规则拒绝为 too_frequent。
+        run.lastSentAt = Date.now();
+      } else {
+        run.offline = true;
+      }
     });
   }
 
@@ -1093,6 +1101,15 @@
     return String(str).replace(/[&<>"']/g, function (c) {
       return ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c];
     });
+  }
+
+  // 轻量前端提示：镜像服务端 start_run() 的白名单（ASCII 字母数字、CJK 统一
+  // 表意文字、空格、下划线、短横线），输入时就去掉非法字符、折叠空白、限长，
+  // 不等提交才发现昵称被改写。真正的拒绝/敏感词兜底仍以服务端为准。
+  function sanitizeNickname(raw) {
+    var cleaned = String(raw || "").replace(/[^a-zA-Z0-9_\- 一-鿿]/g, "");
+    cleaned = cleaned.replace(/\s+/g, " ");
+    return cleaned.slice(0, 12);
   }
 
   function loadTopScores() {
@@ -1258,6 +1275,12 @@
   dom.confirmEndNoBtn.addEventListener("click", cancelEndRun);
   dom.restartBtn.addEventListener("click", function () { hideScreen(dom.resultScreen); beginRun(); });
   dom.homeBtn.addEventListener("click", function () { hideScreen(dom.resultScreen); enterStart(); });
+  dom.nicknameInput.addEventListener("input", function () {
+    dom.nicknameInput.value = sanitizeNickname(dom.nicknameInput.value);
+  });
+  dom.nicknameInputResult.addEventListener("input", function () {
+    dom.nicknameInputResult.value = sanitizeNickname(dom.nicknameInputResult.value);
+  });
   dom.nicknameInputResult.addEventListener("change", function () {
     storageSet("catmouse_nickname", dom.nicknameInputResult.value.trim());
   });
