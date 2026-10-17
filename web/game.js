@@ -41,6 +41,16 @@
   var STATE_PAUSE = "pause";
   var STATE_RESULT = "result";
 
+  // 手机窄屏下猫/老鼠按 REF_W 等比缩放后视觉上偏小（见第二轮审核），额外加一个
+  // 按屏幕短边自适应的放大倍率：短边 <= ENTITY_MOBILE_SHORT_EDGE 时放大到
+  // ENTITY_MOBILE_SCALE_MULT，短边 >= ENTITY_DESKTOP_SHORT_EDGE 时不放大
+  // （桌面端基本不变），中间线性插值。这个倍率会同时应用到渲染尺寸和碰撞/
+  // 捕获判定半径（见 updateCat/updateMice/spawnMouseAt），保证"看起来多大，
+  // 判定就按多大"，不会出现视觉变大但手感没变的割裂感。
+  var ENTITY_MOBILE_SHORT_EDGE = 390;
+  var ENTITY_DESKTOP_SHORT_EDGE = 900;
+  var ENTITY_MOBILE_SCALE_MULT = 1.65;
+
   // =======================================================================
   // Setup & responsive canvas
   // =======================================================================
@@ -48,8 +58,16 @@
   var canvas = document.getElementById("game");
   var ctx = canvas.getContext("2d");
   var W = 0, H = 0, DPR = 1, SCALE = 1;
+  var entityScaleMult = 1;
 
   function s(v) { return v * SCALE; }
+
+  function computeEntityScaleMult(shortEdge) {
+    if (shortEdge <= ENTITY_MOBILE_SHORT_EDGE) return ENTITY_MOBILE_SCALE_MULT;
+    if (shortEdge >= ENTITY_DESKTOP_SHORT_EDGE) return 1;
+    var t = (shortEdge - ENTITY_MOBILE_SHORT_EDGE) / (ENTITY_DESKTOP_SHORT_EDGE - ENTITY_MOBILE_SHORT_EDGE);
+    return lerp(ENTITY_MOBILE_SCALE_MULT, 1, t);
+  }
 
   function resize() {
     W = window.innerWidth;
@@ -61,6 +79,7 @@
     canvas.style.height = H + "px";
     ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
     SCALE = Math.min(W, H) / REF_W;
+    entityScaleMult = computeEntityScaleMult(Math.min(W, H));
   }
 
   window.addEventListener("resize", resize);
@@ -461,6 +480,7 @@
   document.addEventListener("contextmenu", function (e) { e.preventDefault(); });
 
   function updateCat(dt) {
+    cat.r = CAT_RADIUS * entityScaleMult;
     var targetVx = moveDir.x * MOVE_SPEED;
     var targetVy = moveDir.y * MOVE_SPEED;
     var smoothing = 1 - Math.exp(-dt * 14);
@@ -548,7 +568,7 @@
 
   function spawnMouseAt(x, y, type, t) {
     mice.push({
-      x: x, y: y, vx: 0, vy: 0, r: MOUSE_RADIUS,
+      x: x, y: y, vx: 0, vy: 0, r: MOUSE_RADIUS * entityScaleMult,
       type: type,
       speed: BASE_MOUSE_SPEED * speedMultFor(type, t),
       state: "wander",
@@ -597,6 +617,7 @@
   function updateMice(dt) {
     for (var i = mice.length - 1; i >= 0; i--) {
       var m = mice[i];
+      m.r = MOUSE_RADIUS * entityScaleMult;
       var dToCat = distance(m.x, m.y, cat.x, cat.y);
 
       if (m.state === "wander") {
@@ -888,7 +909,7 @@
   }
 
   function drawCat() {
-    drawQuadruped(worldToScreenX(cat.x), worldToScreenY(cat.y), s(CAT_RADIUS), cat.facing, cat.runCycle, "#ff9d5c", "#ffb27a", cat.squash);
+    drawQuadruped(worldToScreenX(cat.x), worldToScreenY(cat.y), s(cat.r), cat.facing, cat.runCycle, "#ff9d5c", "#ffb27a", cat.squash);
   }
 
   function drawMice() {
@@ -896,7 +917,7 @@
       var m = mice[i];
       var sx = worldToScreenX(m.x), sy = worldToScreenY(m.y);
       if (sx < -40 || sx > W + 40 || sy < -40 || sy > H + 40) continue;
-      drawQuadruped(sx, sy, s(MOUSE_RADIUS), m.facing, m.runCycle, MOUSE_COLORS[m.type], MOUSE_COLORS[m.type], 0);
+      drawQuadruped(sx, sy, s(m.r), m.facing, m.runCycle, MOUSE_COLORS[m.type], MOUSE_COLORS[m.type], 0);
     }
   }
 
@@ -1326,7 +1347,7 @@
     ctx.fillStyle = "#8fcf6b";
     ctx.fillRect(0, 0, W, H);
     idleRunCycle += 0.016;
-    drawQuadruped(W / 2, H / 2 + s(20), s(CAT_RADIUS), Math.sin(idleRunCycle * 0.3) * 0.6, idleRunCycle, "#ff9d5c", "#ffb27a", 0);
+    drawQuadruped(W / 2, H / 2 + s(20), s(CAT_RADIUS * entityScaleMult), Math.sin(idleRunCycle * 0.3) * 0.6, idleRunCycle, "#ff9d5c", "#ffb27a", 0);
   }
 
   function draw() {
