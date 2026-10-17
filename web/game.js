@@ -1000,7 +1000,7 @@
       p_client_id: clientId,
       p_seq: run.seq,
       p_play_status: playStatus,
-      p_score: score,
+      p_score: Math.round(score),
       p_catches: catches,
       p_catches_grey: catchesGrey,
       p_catches_brown: catchesBrown,
@@ -1030,7 +1030,7 @@
     rpcPost("finish_run", {
       p_run_id: run.id,
       p_client_id: clientId,
-      p_final_score: score,
+      p_final_score: Math.round(score),
       p_final_catches: catches,
       p_duration_seconds: Math.round(elapsedPlayTime)
     }).then(function (res) {
@@ -1049,7 +1049,7 @@
         body: JSON.stringify({
           p_run_id: run.id,
           p_client_id: clientId,
-          p_final_score: score,
+          p_final_score: Math.round(score),
           p_final_catches: catches,
           p_duration_seconds: Math.round(elapsedPlayTime)
         })
@@ -1193,8 +1193,11 @@
   }
 
   function requestEndRun() {
-    if (state !== STATE_PLAY) return;
+    // "结束本局"只出现在暂停浮层里（见 index.html），所以这里只需要在
+    // STATE_PAUSE 下生效；取消时回到暂停浮层而不是直接恢复游戏。
+    if (state !== STATE_PAUSE) return;
     sfx.click();
+    hideScreen(dom.pauseScreen);
     showScreen(dom.confirmEndScreen);
   }
 
@@ -1203,7 +1206,10 @@
     enterResult();
   }
 
-  function cancelEndRun() { hideScreen(dom.confirmEndScreen); }
+  function cancelEndRun() {
+    hideScreen(dom.confirmEndScreen);
+    showScreen(dom.pauseScreen);
+  }
 
   function enterPause() {
     if (state !== STATE_PLAY) return;

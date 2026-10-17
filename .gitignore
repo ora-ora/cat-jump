@@ -3,6 +3,7 @@ PLAN*.md
 *_PROMPT*.md
 PROMPT*.md
 IMPL_PROMPT*.md
+IMPL_FIX*.md
 *.log
 fixes.md
 shots/

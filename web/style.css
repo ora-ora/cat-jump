@@ -44,6 +44,10 @@ html, body {
   justify-content: space-between;
   padding: max(10px, env(safe-area-inset-top)) 14px 0 14px;
   z-index: 5;
+  /* #hud 本身必须禁用指针事件：否则即使子元素都设了 pointer-events，
+     这个跨越整个顶部的容器仍会挡住下面的 canvas 点击（见 code review）。
+     只有 #hudRight > * 显式打开 pointer-events: auto，按钮才可点。 */
+  pointer-events: none;
 }
 
 #hud.hidden {
@@ -111,23 +115,6 @@ html, body {
 
 .icon-btn:active {
   transform: scale(0.92);
-}
-
-.btn-end {
-  border: none;
-  padding: 10px 16px;
-  font-size: 14px;
-  font-weight: 700;
-  color: #fff;
-  background: linear-gradient(180deg, #ff8a6b, #ff5c45);
-  border-radius: 999px;
-  box-shadow: 0 3px 0 #d8431f, 0 4px 10px rgba(255, 92, 69, 0.35);
-  cursor: pointer;
-}
-
-.btn-end:active {
-  transform: translateY(2px);
-  box-shadow: 0 1px 0 #d8431f, 0 2px 6px rgba(255, 92, 69, 0.35);
 }
 
 .overlay {
