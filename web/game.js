@@ -1,39 +1,57 @@
 (function () {
   "use strict";
 
-  // ---------------------------------------------------------------------
+  // =======================================================================
+  // Config & constants
+  // =======================================================================
+
+  // TODO(站长): 填入 https://<project-ref>.supabase.co
+  var SUPABASE_URL = "";
+  // TODO(站长): 填入 publishable key (sb_publishable_...)
+  var SUPABASE_ANON_KEY = "";
+
+  var LEADERBOARD_SNAPSHOT_LIMIT = 500;
+  var LEADERBOARD_TOPN_LIMIT = 50;
+  var LEADERBOARD_POLL_INTERVAL_MS = 20000;
+
+  var HEARTBEAT_MIN_INTERVAL_MS = 2500;
+  var HEARTBEAT_ACTIVE_INTERVAL_MS = 7000;
+  var HEARTBEAT_IDLE_INTERVAL_MS = 20000;
+  var HEARTBEAT_PAUSED_INTERVAL_MS = 25000;
+
+  var REF_W = 480;
+  var CHUNK_SIZE = 480;
+  var LOAD_MARGIN = CHUNK_SIZE * 0.75;
+  var UNLOAD_MARGIN = CHUNK_SIZE * 2.2;
+  var CHUNK_PRUNE_INTERVAL = 2;
+
+  var MIN_EASY_MICE = 3;
+  var MOUSE_AWARE_R = REF_W * 0.62;
+  var MOUSE_CLEANUP_R = UNLOAD_MARGIN + CHUNK_SIZE;
+
+  var DIFFICULTY_SCORE_CAP = 2000;
+  var DIFFICULTY_TIME_CAP = 300;
+
+  var COMBO_WINDOW = 2.5;
+  var COMBO_MAX_MULT = 3.0;
+  var COMBO_STEP = 0.2;
+
+  var STATE_START = "start";
+  var STATE_PLAY = "play";
+  var STATE_PAUSE = "pause";
+  var STATE_RESULT = "result";
+
+  // =======================================================================
   // Setup & responsive canvas
-  // ---------------------------------------------------------------------
+  // =======================================================================
+
   var canvas = document.getElementById("game");
   var ctx = canvas.getContext("2d");
-
   var W = 0, H = 0, DPR = 1, SCALE = 1;
-  var REF_W = 400;
 
-  // ---------------------------------------------------------------------
-  // Safe storage (localStorage can throw in private/incognito mode or in
-  // some embedded WebViews) -- fall back to an in-memory object so the
-  // game still boots instead of dying on a top-level exception.
-  // ---------------------------------------------------------------------
-  var memStore = {};
-  function storageGet(key, fallback) {
-    try {
-      var v = localStorage.getItem(key);
-      return v === null ? fallback : v;
-    } catch (e) {
-      return Object.prototype.hasOwnProperty.call(memStore, key) ? memStore[key] : fallback;
-    }
-  }
-  function storageSet(key, value) {
-    try {
-      localStorage.setItem(key, value);
-    } catch (e) {
-      memStore[key] = value;
-    }
-  }
+  function s(v) { return v * SCALE; }
 
   function resize() {
-    var oldW = W;
     W = window.innerWidth;
     H = window.innerHeight;
     DPR = window.devicePixelRatio || 1;
@@ -42,64 +60,74 @@
     canvas.style.width = W + "px";
     canvas.style.height = H + "px";
     ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
-    SCALE = Math.min(2.0, Math.max(0.75, W / REF_W));
+    SCALE = Math.min(W, H) / REF_W;
+  }
 
-    // Orientation change / browser-chrome resize: keep existing world
-    // objects inside the new width instead of letting them end up
-    // off-screen or unreachable.
-    if (oldW > 0 && W !== oldW) {
-      var ratio = W / oldW;
-      if (platforms) {
-        for (var i = 0; i < platforms.length; i++) {
-          var p = platforms[i];
-          p.x *= ratio;
-          if (p.w > W) p.w = W;
-          if (p.x + p.w > W) p.x = W - p.w;
-          if (p.x < 0) p.x = 0;
-        }
-      }
-      if (fishes) {
-        for (var j = 0; j < fishes.length; j++) {
-          fishes[j].x = Math.min(W, Math.max(0, fishes[j].x * ratio));
-        }
-      }
-      if (player) player.x = Math.min(W, Math.max(0, player.x * ratio));
-    } else if (player) {
-      player.x = Math.min(player.x, W);
+  window.addEventListener("resize", resize);
+  window.addEventListener("orientationchange", resize);
+  resize();
+
+  function clamp(v, lo, hi) { return v < lo ? lo : (v > hi ? hi : v); }
+  function clamp01(v) { return clamp(v, 0, 1); }
+  function lerp(a, b, t) { return a + (b - a) * t; }
+
+  // =======================================================================
+  // Storage
+  // =======================================================================
+
+  function storageGet(key, fallback) {
+    try {
+      var v = window.localStorage.getItem(key);
+      return v === null ? fallback : v;
+    } catch (e) {
+      return fallback;
     }
   }
 
-  // ---------------------------------------------------------------------
-  // Audio (WebAudio synth, no external assets)
-  // ---------------------------------------------------------------------
+  function storageSet(key, value) {
+    try {
+      window.localStorage.setItem(key, value);
+    } catch (e) {
+      // localStorage 不可用（隐私模式等）时静默忽略，不影响游戏运行
+    }
+  }
+
+  // =======================================================================
+  // Audio engine (Web Audio 合成，无外部音频文件)
+  // =======================================================================
+
   var audioCtx = null;
   var masterGain = null;
-  var muted = storageGet("catjump_muted", "0") === "1";
+  var muted = storageGet("catmouse_muted", "0") === "1";
 
   function ensureAudio() {
-    if (audioCtx) return;
-    var AC = window.AudioContext || window.webkitAudioContext;
-    if (!AC) return;
-    audioCtx = new AC();
-    masterGain = audioCtx.createGain();
-    masterGain.gain.value = muted ? 0 : 0.35;
-    masterGain.connect(audioCtx.destination);
+    if (audioCtx) {
+      if (audioCtx.state === "suspended") audioCtx.resume();
+      return;
+    }
+    try {
+      var AC = window.AudioContext || window.webkitAudioContext;
+      audioCtx = new AC();
+      masterGain = audioCtx.createGain();
+      masterGain.gain.value = muted ? 0 : 0.35;
+      masterGain.connect(audioCtx.destination);
+    } catch (e) {
+      audioCtx = null;
+    }
   }
 
   function tone(freq, duration, type, opts) {
-    if (!audioCtx || muted) return;
+    if (!audioCtx || !masterGain) return;
     opts = opts || {};
     var t0 = audioCtx.currentTime;
     var osc = audioCtx.createOscillator();
     var gain = audioCtx.createGain();
     osc.type = type || "sine";
     osc.frequency.setValueAtTime(freq, t0);
-    if (opts.slideTo) {
-      osc.frequency.exponentialRampToValueAtTime(Math.max(20, opts.slideTo), t0 + duration);
-    }
-    var peak = opts.volume != null ? opts.volume : 0.3;
+    if (opts.slideTo) osc.frequency.exponentialRampToValueAtTime(opts.slideTo, t0 + duration);
+    var vol = opts.volume != null ? opts.volume : 0.5;
     gain.gain.setValueAtTime(0.0001, t0);
-    gain.gain.exponentialRampToValueAtTime(peak, t0 + 0.015);
+    gain.gain.exponentialRampToValueAtTime(vol, t0 + Math.min(0.015, duration * 0.3));
     gain.gain.exponentialRampToValueAtTime(0.0001, t0 + duration);
     osc.connect(gain);
     gain.connect(masterGain);
@@ -108,18 +136,16 @@
   }
 
   function noiseBurst(duration, volume) {
-    if (!audioCtx || muted) return;
+    if (!audioCtx || !masterGain) return;
     var t0 = audioCtx.currentTime;
-    var len = Math.floor(audioCtx.sampleRate * duration);
-    var buffer = audioCtx.createBuffer(1, len, audioCtx.sampleRate);
+    var bufferSize = Math.max(1, Math.floor(audioCtx.sampleRate * duration));
+    var buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
     var data = buffer.getChannelData(0);
-    for (var i = 0; i < len; i++) {
-      data[i] = (Math.random() * 2 - 1) * (1 - i / len);
-    }
+    for (var i = 0; i < bufferSize; i++) data[i] = (Math.random() * 2 - 1) * (1 - i / bufferSize);
     var src = audioCtx.createBufferSource();
     src.buffer = buffer;
     var gain = audioCtx.createGain();
-    gain.gain.setValueAtTime(volume || 0.25, t0);
+    gain.gain.setValueAtTime(volume == null ? 0.2 : volume, t0);
     gain.gain.exponentialRampToValueAtTime(0.0001, t0 + duration);
     src.connect(gain);
     gain.connect(masterGain);
@@ -127,684 +153,329 @@
   }
 
   var sfx = {
-    jump: function () { tone(320, 0.12, "triangle", { slideTo: 220, volume: 0.25 }); },
-    spring: function () { tone(200, 0.28, "sawtooth", { slideTo: 700, volume: 0.22 }); },
-    fish: function () {
-      tone(880, 0.1, "sine", { volume: 0.22 });
-      setTimeout(function () { tone(1320, 0.12, "sine", { volume: 0.2 }); }, 70);
+    catchGrey: function () { tone(700, 0.08, "sine", { slideTo: 1000, volume: 0.45 }); },
+    catchBrown: function () {
+      tone(820, 0.09, "sine", { slideTo: 1200, volume: 0.45 });
+      setTimeout(function () { tone(1100, 0.08, "sine", { slideTo: 1500, volume: 0.35 }); }, 55);
     },
-    crack: function () { noiseBurst(0.18, 0.2); },
-    gameover: function () { tone(420, 0.5, "sawtooth", { slideTo: 120, volume: 0.22 }); },
-    click: function () { tone(520, 0.06, "square", { volume: 0.12 }); }
+    catchGold: function () {
+      tone(900, 0.07, "triangle", { slideTo: 1300, volume: 0.4 });
+      setTimeout(function () { tone(1300, 0.07, "triangle", { slideTo: 1700, volume: 0.4 }); }, 60);
+      setTimeout(function () { tone(1700, 0.1, "triangle", { slideTo: 2200, volume: 0.4 }); }, 120);
+      setTimeout(function () { noiseBurst(0.08, 0.1); }, 120);
+    },
+    combo: function () { tone(500, 0.05, "square", { volume: 0.18 }); },
+    rankUp: function () { tone(600, 0.06, "sine", { slideTo: 900, volume: 0.22 }); },
+    click: function () { tone(500, 0.04, "sine", { slideTo: 650, volume: 0.3 }); },
+    endRun: function () { tone(500, 0.18, "sine", { slideTo: 300, volume: 0.35 }); },
   };
 
-  function setMuted(v) {
-    muted = v;
-    storageSet("catjump_muted", muted ? "1" : "0");
+  function toggleMute() {
+    muted = !muted;
+    storageSet("catmouse_muted", muted ? "1" : "0");
     if (masterGain) masterGain.gain.value = muted ? 0 : 0.35;
-    muteBtn.textContent = muted ? "🔇" : "🔊";
+    updateMuteBtn();
   }
 
-  // ---------------------------------------------------------------------
-  // Game constants (scaled by SCALE for device independence)
-  // ---------------------------------------------------------------------
-  function s(v) { return v * SCALE; }
+  // =======================================================================
+  // RNG utils
+  // =======================================================================
 
-  var GRAVITY = 2000;
-  var BOUNCE_V = 780;
-  var SPRING_V = 1300;
-  var BREAK_BOUNCE_V = 620;
-  var MOVE_SPEED = 480;
-  var CAT_W = 34, CAT_H = 30;
-  var PLAT_W = 70, PLAT_H = 16;
-  var SPRING_W = 16; // visual width, also used to size the spring's hit zone
-  var SPRING_HIT_PAD = 14; // extra horizontal tolerance beyond the spring's own width
+  function mulberry32(seed) {
+    return function () {
+      seed |= 0;
+      seed = (seed + 0x6D2B79F5) | 0;
+      var t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
 
-  // ---------------------------------------------------------------------
-  // Game state
-  // ---------------------------------------------------------------------
-  var STATE_START = "start", STATE_PLAY = "play", STATE_OVER = "over";
-  var state = STATE_START;
+  function hashChunkSeed(worldSeed, cx, cy) {
+    var h = worldSeed ^ (cx * 374761393) ^ (cy * 668265263);
+    h = (h ^ (h >>> 13)) * 1274126177;
+    return (h ^ (h >>> 16)) >>> 0;
+  }
 
-  var player, platforms, fishes, clouds;
-  var cameraY, score, fishBonus, best;
-  var topGenY; // highest (smallest) y generated so far
-  var startPlayerY;
-  var shakeT = 0;
+  function randRange(rng, lo, hi) { return lo + rng() * (hi - lo); }
 
-  var moveDir = 0; // -1, 0, 1 from keyboard/pointer half-press
+  function pickWeighted(rng, items) {
+    var total = 0;
+    var i;
+    for (i = 0; i < items.length; i++) total += items[i].weight;
+    var r = rng() * total;
+    for (i = 0; i < items.length; i++) {
+      r -= items[i].weight;
+      if (r <= 0) return items[i].value;
+    }
+    return items[items.length - 1].value;
+  }
+
+  function distance(x1, y1, x2, y2) {
+    var dx = x2 - x1, dy = y2 - y1;
+    return Math.sqrt(dx * dx + dy * dy);
+  }
+
+  function normalize(dx, dy) {
+    var len = Math.sqrt(dx * dx + dy * dy);
+    if (len < 0.0001) return { x: 0, y: 0, len: 0 };
+    return { x: dx / len, y: dy / len, len: len };
+  }
+
+  function resolveCircleAabb(circle, box) {
+    var nearestX = clamp(circle.x, box.x, box.x + box.w);
+    var nearestY = clamp(circle.y, box.y, box.y + box.h);
+    var dx = circle.x - nearestX, dy = circle.y - nearestY;
+    var distSq = dx * dx + dy * dy;
+    if (distSq >= circle.r * circle.r || distSq === 0) return;
+    var dist = Math.sqrt(distSq);
+    var overlap = circle.r - dist;
+    circle.x += (dx / dist) * overlap;
+    circle.y += (dy / dist) * overlap;
+  }
+
+  // =======================================================================
+  // World / Chunk system（区块化确定性生成，世界坐标用逻辑单位，不随 DPR/屏幕尺寸变化）
+  // =======================================================================
+
+  var worldSeed = 0;
+  var chunkCache = new Map();
+
+  function chunkKey(cx, cy) { return cx + "," + cy; }
+  function worldToChunk(x, y) { return { cx: Math.floor(x / CHUNK_SIZE), cy: Math.floor(y / CHUNK_SIZE) }; }
+
+  function generateChunk(cx, cy) {
+    var rng = mulberry32(hashChunkSeed(worldSeed, cx, cy));
+    var baseX = cx * CHUNK_SIZE, baseY = cy * CHUNK_SIZE;
+    var i;
+
+    var decor = [];
+    var decorCount = 6 + Math.floor(rng() * 6);
+    for (i = 0; i < decorCount; i++) {
+      decor.push({
+        x: baseX + rng() * CHUNK_SIZE,
+        y: baseY + rng() * CHUNK_SIZE,
+        kind: pickWeighted(rng, [{ value: "grass", weight: 3 }, { value: "flower", weight: 1 }, { value: "pebble", weight: 1 }]),
+        rot: rng() * Math.PI * 2,
+        scale: 0.8 + rng() * 0.5
+      });
+    }
+
+    var obstacles = [];
+    var obstacleTarget = Math.floor(rng() * 4);
+    var attempts = 0;
+    while (obstacles.length < obstacleTarget && attempts < 20) {
+      attempts++;
+      var ow = 28 + rng() * 26, oh = 28 + rng() * 26;
+      var ox = baseX + rng() * (CHUNK_SIZE - ow);
+      var oy = baseY + rng() * (CHUNK_SIZE - oh);
+      var ok = true;
+      for (i = 0; i < obstacles.length; i++) {
+        var o = obstacles[i];
+        var ddx = (ox + ow / 2) - (o.x + o.w / 2);
+        var ddy = (oy + oh / 2) - (o.y + o.h / 2);
+        if (Math.sqrt(ddx * ddx + ddy * ddy) < 90) { ok = false; break; }
+      }
+      if (!ok) continue;
+      obstacles.push({
+        x: ox, y: oy, w: ow, h: oh,
+        kind: pickWeighted(rng, [{ value: "crate", weight: 1 }, { value: "bush", weight: 1 }, { value: "rock", weight: 1 }]),
+        tint: rng()
+      });
+    }
+
+    var mouseSpawnPoints = [];
+    var spawnCount = 2 + Math.floor(rng() * 3);
+    for (i = 0; i < spawnCount; i++) {
+      mouseSpawnPoints.push({ x: baseX + rng() * CHUNK_SIZE, y: baseY + rng() * CHUNK_SIZE });
+    }
+
+    return { cx: cx, cy: cy, decor: decor, obstacles: obstacles, mouseSpawnPoints: mouseSpawnPoints };
+  }
+
+  function getChunk(cx, cy) {
+    var key = chunkKey(cx, cy);
+    var chunk = chunkCache.get(key);
+    if (!chunk) {
+      chunk = generateChunk(cx, cy);
+      chunkCache.set(key, chunk);
+    }
+    return chunk;
+  }
+
+  function ensureChunksAround(centerX, centerY) {
+    var c0 = worldToChunk(centerX, centerY);
+    var range = Math.ceil(LOAD_MARGIN / CHUNK_SIZE) + 1;
+    for (var dy = -range; dy <= range; dy++) {
+      for (var dx = -range; dx <= range; dx++) getChunk(c0.cx + dx, c0.cy + dy);
+    }
+  }
+
+  var pruneTimer = 0;
+  function pruneFarChunks(dt, centerX, centerY) {
+    pruneTimer += dt;
+    if (pruneTimer < CHUNK_PRUNE_INTERVAL) return;
+    pruneTimer = 0;
+    var toDelete = [];
+    chunkCache.forEach(function (chunk, key) {
+      var ccx = chunk.cx * CHUNK_SIZE + CHUNK_SIZE / 2;
+      var ccy = chunk.cy * CHUNK_SIZE + CHUNK_SIZE / 2;
+      if (distance(ccx, ccy, centerX, centerY) > UNLOAD_MARGIN) toDelete.push(key);
+    });
+    for (var i = 0; i < toDelete.length; i++) chunkCache.delete(toDelete[i]);
+  }
+
+  function queryNearbyObstacles(x, y) {
+    var c = worldToChunk(x, y);
+    var list = [];
+    for (var dy = -1; dy <= 1; dy++) {
+      for (var dx = -1; dx <= 1; dx++) {
+        var chunk = chunkCache.get(chunkKey(c.cx + dx, c.cy + dy));
+        if (chunk) list = list.concat(chunk.obstacles);
+      }
+    }
+    return list;
+  }
+
+  function nearbyMouseSpawnPoints(centerX, centerY) {
+    var points = [];
+    chunkCache.forEach(function (chunk) {
+      var ccx = chunk.cx * CHUNK_SIZE + CHUNK_SIZE / 2;
+      var ccy = chunk.cy * CHUNK_SIZE + CHUNK_SIZE / 2;
+      if (distance(ccx, ccy, centerX, centerY) < LOAD_MARGIN + CHUNK_SIZE) {
+        for (var i = 0; i < chunk.mouseSpawnPoints.length; i++) points.push(chunk.mouseSpawnPoints[i]);
+      }
+    });
+    return points;
+  }
+
+  // =======================================================================
+  // Entities
+  // =======================================================================
+
+  var MOVE_SPEED = 150;
+  var CAT_RADIUS = 15;
+  var MOUSE_RADIUS = 12;
+  var BASE_MOUSE_SPEED = 70;
+
+  var cat = {
+    x: 0, y: 0, vx: 0, vy: 0, r: CAT_RADIUS,
+    facing: 0, runCycle: 0, squash: 0
+  };
+
+  var moveDir = { x: 0, y: 0 };
+
+  var mice = [];
+
+  function resetWorld() {
+    worldSeed = (Math.random() * 2147483647) | 0;
+    chunkCache.clear();
+    mice.length = 0;
+    cat.x = 0; cat.y = 0; cat.vx = 0; cat.vy = 0; cat.facing = 0; cat.runCycle = 0; cat.squash = 0;
+    camera.x = 0; camera.y = 0;
+    ensureChunksAround(0, 0);
+  }
+
+  // =======================================================================
+  // Camera
+  // =======================================================================
+
+  var camera = { x: 0, y: 0 };
+
+  function updateCamera(dt) {
+    var smoothing = 1 - Math.exp(-dt * 6);
+    camera.x += (cat.x - camera.x) * smoothing;
+    camera.y += (cat.y - camera.y) * smoothing;
+  }
+
+  function worldToScreenX(x) { return (x - camera.x) * SCALE + W / 2; }
+  function worldToScreenY(y) { return (y - camera.y) * SCALE + H / 2; }
+
+  // =======================================================================
+  // Input（指针/鼠标/键盘，方向判定相对屏幕中心）
+  // =======================================================================
+
   var activePointerId = null;
+  var keysDown = {};
+  var DEAD_ZONE_PX = 18;
 
-  best = parseInt(storageGet("catjump_best", "0"), 10) || 0;
-
-  var scoreEl = document.getElementById("score");
-  var bestStartEl = document.getElementById("bestScoreStart");
-  var bestEndEl = document.getElementById("bestScoreEnd");
-  var finalScoreEl = document.getElementById("finalScore");
-  var startScreen = document.getElementById("startScreen");
-  var gameOverScreen = document.getElementById("gameOverScreen");
-  var startBtn = document.getElementById("startBtn");
-  var restartBtn = document.getElementById("restartBtn");
-  var muteBtn = document.getElementById("muteBtn");
-
-  bestStartEl.textContent = best;
-  muteBtn.textContent = muted ? "🔇" : "🔊";
-  scoreEl.classList.add("hidden"); // no score to show until play starts
-
-  function resetGame() {
-    player = {
-      x: W / 2,
-      y: H * 0.7,
-      vx: 0,
-      vy: -BOUNCE_V * SCALE,
-      facing: 1,
-      squash: 0
-    };
-    startPlayerY = player.y;
-    cameraY = 0;
-    score = 0;
-    fishBonus = 0;
-    platforms = [];
-    fishes = [];
-    clouds = [];
-
-    // starting platform directly under the cat
-    var startPlat = {
-      x: W / 2 - s(PLAT_W) * 0.8,
-      y: H * 0.82,
-      w: s(PLAT_W) * 1.6,
-      h: s(PLAT_H),
-      type: "normal",
-      vx: 0,
-      spring: false,
-      broken: false,
-      breakT: 0
-    };
-    platforms.push(startPlat);
-    topGenY = startPlat.y;
-
-    for (var i = 0; i < 14; i++) generateNextPlatform();
-    for (var c = 0; c < 6; c++) {
-      clouds.push({
-        x: Math.random() * W,
-        y: -Math.random() * H * 4,
-        r: s(26 + Math.random() * 24),
-        speed: s(6 + Math.random() * 10)
-      });
-    }
+  function computeDirFromPoint(px, py) {
+    var dx = px - W / 2, dy = py - H / 2;
+    var distPx = Math.sqrt(dx * dx + dy * dy);
+    if (distPx < s(DEAD_ZONE_PX)) return null;
+    var n = normalize(dx, dy);
+    return { x: n.x, y: n.y };
   }
 
-  function difficultyAt(climbed) {
-    return Math.min(1, Math.max(0, climbed / s(5200)));
+  function syncKeyDir() {
+    if (activePointerId !== null) return;
+    var dx = 0, dy = 0;
+    if (keysDown.ArrowLeft || keysDown.a || keysDown.A) dx -= 1;
+    if (keysDown.ArrowRight || keysDown.d || keysDown.D) dx += 1;
+    if (keysDown.ArrowUp || keysDown.w || keysDown.W) dy -= 1;
+    if (keysDown.ArrowDown || keysDown.s || keysDown.S) dy += 1;
+    if (dx === 0 && dy === 0) { moveDir.x = 0; moveDir.y = 0; return; }
+    var n = normalize(dx, dy);
+    moveDir.x = n.x; moveDir.y = n.y;
   }
 
-  function lerp(a, b, t) { return a + (b - a) * t; }
-
-  // -----------------------------------------------------------------------
-  // Invariant: the "main chain" (the sequence that advances topGenY) is
-  // built ONLY from solid platforms (normal/move), with each consecutive
-  // gap <= maxJump*0.86 where maxJump is the height reachable with the
-  // guaranteed normal bounce (BOUNCE_V). This means the climb is always
-  // possible using nothing but the main chain, regardless of what happens
-  // with any breakable platform.
-  //
-  // Breakable platforms are never part of the main chain -- they are
-  // generated as an extra, optional platform placed below the *next*
-  // main-chain platform, close enough that even the weaker break-bounce
-  // (BREAK_BOUNCE_V) can still reach that next platform. So landing on a
-  // breakable is always a safe (if risky-looking) option, never a trap,
-  // and since each gap gets at most one, two breakables never chain back
-  // to back.
-  // -----------------------------------------------------------------------
-  function generateNextPlatform() {
-    var climbed = Math.max(0, startPlayerY - topGenY);
-    var t = difficultyAt(climbed);
-
-    var maxJump = (BOUNCE_V * SCALE) * (BOUNCE_V * SCALE) / (2 * GRAVITY * SCALE);
-    var minGap = lerp(s(55), s(78), t);
-    var maxGap = Math.min(lerp(s(95), s(132), t), maxJump * 0.86);
-    var gap = minGap + Math.random() * (maxGap - minGap);
-
-    var yPrev = topGenY;
-    var y = yPrev - gap;
-    var w = s(PLAT_W) * lerp(1.0, 0.8, t);
-    var x = Math.random() * (W - w);
-
-    var pMove = lerp(0.1, 0.3, t);
-    var type = Math.random() < pMove ? "move" : "normal";
-
-    var plat = {
-      x: x, y: y, w: w, h: s(PLAT_H),
-      type: type,
-      vx: type === "move" ? (Math.random() < 0.5 ? -1 : 1) * lerp(s(40), s(115), t) : 0,
-      spring: Math.random() < 0.16,
-      broken: false,
-      breakT: 0
-    };
-    platforms.push(plat);
-
-    if (Math.random() < 0.16) {
-      fishes.push({
-        x: Math.min(W - s(18), Math.max(s(18), x + w / 2 + (Math.random() * 2 - 1) * s(40))),
-        y: y - s(40) - Math.random() * s(20),
-        taken: false,
-        bob: Math.random() * Math.PI * 2
-      });
-    }
-
-    var pBreak = lerp(0.05, 0.22, t);
-    if (Math.random() < pBreak) {
-      var breakMaxJump = (BREAK_BOUNCE_V * SCALE) * (BREAK_BOUNCE_V * SCALE) / (2 * GRAVITY * SCALE);
-      var maxOffset = Math.min(breakMaxJump * 0.8, gap * 0.7);
-      var minOffset = Math.min(s(20), maxOffset);
-      var offset = minOffset + Math.random() * Math.max(0, maxOffset - minOffset);
-      var bw = w * 0.85;
-      var bx = Math.random() * (W - bw);
-      platforms.push({
-        x: bx, y: y + offset, w: bw, h: s(PLAT_H),
-        type: "break", vx: 0, spring: false, broken: false, breakT: 0
-      });
-    }
-
-    topGenY = y;
-  }
-
-  // ---------------------------------------------------------------------
-  // Input
-  // ---------------------------------------------------------------------
-  function setDirFromX(px) {
-    moveDir = px < W / 2 ? -1 : 1;
-  }
-
-  canvas.addEventListener("pointerdown", function (e) {
+  function onPointerDown(e) {
     ensureAudio();
-    if (audioCtx && audioCtx.state === "suspended") audioCtx.resume();
+    if (state !== STATE_PLAY) return;
+    if (activePointerId !== null) return;
     activePointerId = e.pointerId;
-    setDirFromX(e.clientX);
-  });
-  canvas.addEventListener("pointermove", function (e) {
+    var dir = computeDirFromPoint(e.clientX, e.clientY);
+    if (dir) { moveDir.x = dir.x; moveDir.y = dir.y; }
+  }
+
+  function onPointerMove(e) {
     if (e.pointerId !== activePointerId) return;
-    setDirFromX(e.clientX);
-  });
-  function releasePointer(e) {
+    var dir = computeDirFromPoint(e.clientX, e.clientY);
+    if (dir) { moveDir.x = dir.x; moveDir.y = dir.y; }
+  }
+
+  function onPointerUp(e) {
     if (e.pointerId !== activePointerId) return;
     activePointerId = null;
-    moveDir = 0;
+    moveDir.x = 0; moveDir.y = 0;
+    syncKeyDir();
   }
-  canvas.addEventListener("pointerup", releasePointer);
-  canvas.addEventListener("pointercancel", releasePointer);
-  canvas.addEventListener("pointerleave", releasePointer);
 
-  var keyLeft = false, keyRight = false;
+  canvas.addEventListener("pointerdown", onPointerDown);
+  window.addEventListener("pointermove", onPointerMove);
+  window.addEventListener("pointerup", onPointerUp);
+  window.addEventListener("pointercancel", onPointerUp);
+  window.addEventListener("pointerleave", onPointerUp);
+
   window.addEventListener("keydown", function (e) {
-    if (e.code === "ArrowLeft" || e.code === "KeyA") { keyLeft = true; }
-    if (e.code === "ArrowRight" || e.code === "KeyD") { keyRight = true; }
+    keysDown[e.key] = true;
     syncKeyDir();
   });
   window.addEventListener("keyup", function (e) {
-    if (e.code === "ArrowLeft" || e.code === "KeyA") { keyLeft = false; }
-    if (e.code === "ArrowRight" || e.code === "KeyD") { keyRight = false; }
+    keysDown[e.key] = false;
     syncKeyDir();
   });
-  function syncKeyDir() {
-    if (activePointerId !== null) return;
-    if (keyLeft && !keyRight) moveDir = -1;
-    else if (keyRight && !keyLeft) moveDir = 1;
-    else moveDir = 0;
-  }
 
-  document.addEventListener("contextmenu", function (e) { e.preventDefault(); });
   document.addEventListener("touchmove", function (e) { e.preventDefault(); }, { passive: false });
   document.addEventListener("gesturestart", function (e) { e.preventDefault(); });
+  document.addEventListener("contextmenu", function (e) { e.preventDefault(); });
 
-  // ---------------------------------------------------------------------
-  // UI wiring
-  // ---------------------------------------------------------------------
-  function overlapRangesX(ax, aw, bx, bw) {
-    var shifts = [0, -W, W];
-    for (var i = 0; i < shifts.length; i++) {
-      var a0 = ax + shifts[i];
-      if (a0 + aw > bx && a0 < bx + bw) return true;
-    }
-    return false;
-  }
-
-  function startGame() {
-    ensureAudio();
-    if (audioCtx && audioCtx.state === "suspended") audioCtx.resume();
-    resetGame();
-    state = STATE_PLAY;
-    startScreen.classList.add("hidden");
-    gameOverScreen.classList.add("hidden");
-    scoreEl.classList.remove("hidden");
-  }
-
-  function endGame() {
-    state = STATE_OVER;
-    sfx.gameover();
-    var total = score;
-    if (total > best) {
-      best = total;
-      storageSet("catjump_best", String(best));
-    }
-    finalScoreEl.textContent = total;
-    bestEndEl.textContent = best;
-    gameOverScreen.classList.remove("hidden");
-  }
-
-  startBtn.addEventListener("click", function () { sfx.click(); startGame(); });
-  restartBtn.addEventListener("click", function () { sfx.click(); startGame(); });
-  muteBtn.addEventListener("click", function () {
-    ensureAudio();
-    setMuted(!muted);
-  });
-
-  window.addEventListener("resize", resize);
-  window.addEventListener("orientationchange", resize);
-  document.addEventListener("visibilitychange", function () {
-    if (document.hidden) moveDir = 0;
-  });
-
-  // ---------------------------------------------------------------------
-  // Update
-  // ---------------------------------------------------------------------
-  function update(dt) {
-    if (state !== STATE_PLAY) return;
-
-    // horizontal movement with smoothing
-    var targetVx = moveDir * s(MOVE_SPEED);
+  function updateCat(dt) {
+    var targetVx = moveDir.x * MOVE_SPEED;
+    var targetVy = moveDir.y * MOVE_SPEED;
     var smoothing = 1 - Math.exp(-dt * 14);
-    player.vx += (targetVx - player.vx) * smoothing;
-    player.x += player.vx * dt;
-    if (player.x < 0) player.x += W;
-    if (player.x > W) player.x -= W;
-    if (player.vx > 2) player.facing = 1;
-    else if (player.vx < -2) player.facing = -1;
+    cat.vx += (targetVx - cat.vx) * smoothing;
+    cat.vy += (targetVy - cat.vy) * smoothing;
+    cat.x += cat.vx * dt;
+    cat.y += cat.vy * dt;
 
-    // vertical physics
-    var prevFootY = player.y + s(CAT_H) / 2;
-    player.vy += GRAVITY * SCALE * dt;
-    player.y += player.vy * dt;
-    var footY = player.y + s(CAT_H) / 2;
+    var obstacles = queryNearbyObstacles(cat.x, cat.y);
+    for (var i = 0; i < obstacles.length; i++) resolveCircleAabb(cat, obstacles[i]);
 
-    // platform collision (only when falling, only land on top)
-    if (player.vy > 0) {
-      for (var i = 0; i < platforms.length; i++) {
-        var p = platforms[i];
-        if (p.broken) continue;
-        if (prevFootY > p.y + 2) continue; // already below/through platform top last frame
-        if (footY < p.y) continue;
-        if (footY > p.y + p.h + Math.max(24, player.vy * dt)) continue;
-        var halfW = s(CAT_W) / 2 * 0.7;
-        if (!overlapRangesX(player.x - halfW, halfW * 2, p.x, p.w)) continue;
-
-        // landed
-        player.y = p.y - s(CAT_H) / 2;
-        player.squash = 1;
-        if (p.type === "break") {
-          player.vy = -BREAK_BOUNCE_V * SCALE;
-          p.broken = true;
-          p.breakT = 0;
-          sfx.crack();
-        } else {
-          // Spring only triggers the big bounce if the cat's feet actually
-          // land near the spring icon, not anywhere on the platform.
-          var springHalfRange = s(SPRING_W) / 2 + s(SPRING_HIT_PAD);
-          var springX = p.x + p.w / 2;
-          if (p.spring && Math.abs(player.x - springX) <= springHalfRange) {
-            player.vy = -SPRING_V * SCALE;
-            sfx.spring();
-          } else {
-            player.vy = -BOUNCE_V * SCALE;
-            sfx.jump();
-          }
-        }
-        break;
-      }
-    }
-
-    // moving platforms
-    for (var j = 0; j < platforms.length; j++) {
-      var mp = platforms[j];
-      if (mp.type === "move" && !mp.broken) {
-        mp.x += mp.vx * dt;
-        if (mp.x < 0) { mp.x = 0; mp.vx *= -1; }
-        if (mp.x + mp.w > W) { mp.x = W - mp.w; mp.vx *= -1; }
-      }
-      if (mp.broken) mp.breakT += dt;
-    }
-    platforms = platforms.filter(function (p) { return p.breakT < 0.4; });
-
-    if (player.squash > 0) player.squash = Math.max(0, player.squash - dt * 4);
-
-    // camera: only ever scrolls upward (never back down)
-    var pinY = H * 0.42;
-    var desiredCam = player.y - pinY;
-    if (player.vy < 0 && desiredCam < cameraY) cameraY = desiredCam;
-
-    // ensure platforms ahead exist
-    while (topGenY > cameraY - H * 1.3) generateNextPlatform();
-    // cull off-screen platforms/fish below view
-    platforms = platforms.filter(function (p) { return (p.y - cameraY) < H + s(160); });
-    fishes = fishes.filter(function (f) { return !f.taken && (f.y - cameraY) < H + s(160); });
-
-    // fish collection
-    var halfCat = s(CAT_W) / 2 * 0.9;
-    for (var k = 0; k < fishes.length; k++) {
-      var f = fishes[k];
-      if (f.taken) continue;
-      f.bob += dt * 4;
-      var dx = Math.abs(f.x - player.x);
-      var dy = Math.abs(f.y - player.y);
-      if (dx < halfCat + s(12) && dy < halfCat + s(12)) {
-        f.taken = true;
-        fishBonus += 5;
-        sfx.fish();
-      }
-    }
-
-    // clouds (decorative, parallax)
-    for (var c = 0; c < clouds.length; c++) {
-      var cl = clouds[c];
-      cl.x += cl.speed * dt * 0.2;
-      if (cl.x > W + cl.r) cl.x = -cl.r;
-      if ((cl.y - cameraY * 0.6) > H + cl.r) {
-        cl.y = cameraY - H * (1 + Math.random() * 3);
-        cl.x = Math.random() * W;
-      }
-    }
-
-    var climbed = Math.max(0, -cameraY);
-    score = Math.floor(climbed / s(10)) + fishBonus;
-    scoreEl.textContent = score;
-
-    // game over: fell below bottom of screen
-    var screenY = player.y - cameraY;
-    if (screenY - s(CAT_H) > H) {
-      endGame();
-    }
+    var speed = Math.sqrt(cat.vx * cat.vx + cat.vy * cat.vy);
+    if (speed > 4) cat.facing = Math.atan2(cat.vy, cat.vx);
+    cat.runCycle += dt * (speed / 24 + 0.3);
+    cat.squash = Math.max(0, cat.squash - dt * 4);
   }
 
-  // ---------------------------------------------------------------------
-  // Draw
-  // ---------------------------------------------------------------------
-  function skyColor(climbed) {
-    var t = Math.min(1, climbed / s(9000));
-    var top = lerpColor([135, 206, 250], [30, 30, 80], t);
-    var bot = lerpColor([255, 236, 196], [90, 50, 120], t);
-    return [top, bot];
-  }
-  function lerpColor(a, b, t) {
-    return [
-      Math.round(lerp(a[0], b[0], t)),
-      Math.round(lerp(a[1], b[1], t)),
-      Math.round(lerp(a[2], b[2], t))
-    ];
-  }
-  function rgb(c) { return "rgb(" + c[0] + "," + c[1] + "," + c[2] + ")"; }
-
-  function drawBackground() {
-    var climbed = Math.max(0, -cameraY);
-    var colors = skyColor(climbed);
-    var g = ctx.createLinearGradient(0, 0, 0, H);
-    g.addColorStop(0, rgb(colors[0]));
-    g.addColorStop(1, rgb(colors[1]));
-    ctx.fillStyle = g;
-    ctx.fillRect(0, 0, W, H);
-
-    ctx.save();
-    ctx.globalAlpha = 0.85;
-    for (var i = 0; i < clouds.length; i++) {
-      var c = clouds[i];
-      var sy = c.y - cameraY * 0.6;
-      drawCloud(c.x, sy, c.r);
-    }
-    ctx.restore();
-  }
-
-  function drawCloud(x, y, r) {
-    ctx.fillStyle = "rgba(255,255,255,0.85)";
-    ctx.beginPath();
-    ctx.arc(x, y, r * 0.6, 0, Math.PI * 2);
-    ctx.arc(x + r * 0.55, y + r * 0.1, r * 0.45, 0, Math.PI * 2);
-    ctx.arc(x - r * 0.55, y + r * 0.12, r * 0.42, 0, Math.PI * 2);
-    ctx.fill();
-  }
-
-  function drawPlatform(p) {
-    var sy = p.y - cameraY;
-    if (sy < -s(40) || sy > H + s(40)) return;
-    var alpha = 1;
-    if (p.broken) alpha = Math.max(0, 1 - p.breakT / 0.4);
-    var dy = p.broken ? p.breakT * s(260) : 0;
-
-    ctx.save();
-    ctx.globalAlpha = alpha;
-    ctx.translate(0, dy);
-
-    var colorMain, colorDark;
-    if (p.type === "break") { colorMain = "#f7b6c2"; colorDark = "#e08596"; }
-    else if (p.type === "move") { colorMain = "#8fd3ff"; colorDark = "#4fa9e8"; }
-    else { colorMain = "#b6e38a"; colorDark = "#7fbf52"; }
-
-    roundRect(p.x, sy, p.w, p.h, p.h / 2, colorMain, colorDark);
-
-    if (p.type === "break") {
-      ctx.strokeStyle = "rgba(180,60,90,0.5)";
-      ctx.lineWidth = Math.max(1, s(1.2));
-      ctx.beginPath();
-      ctx.moveTo(p.x + p.w * 0.3, sy + 1);
-      ctx.lineTo(p.x + p.w * 0.42, sy + p.h - 2);
-      ctx.moveTo(p.x + p.w * 0.65, sy + 2);
-      ctx.lineTo(p.x + p.w * 0.55, sy + p.h - 1);
-      ctx.stroke();
-    }
-
-    if (p.spring) {
-      drawSpring(p.x + p.w / 2, sy);
-    }
-
-    ctx.restore();
-  }
-
-  function roundRect(x, y, w, h, r, fill, darkFill) {
-    ctx.beginPath();
-    ctx.moveTo(x + r, y);
-    ctx.arcTo(x + w, y, x + w, y + h, r);
-    ctx.arcTo(x + w, y + h, x, y + h, r);
-    ctx.arcTo(x, y + h, x, y, r);
-    ctx.arcTo(x, y, x + w, y, r);
-    ctx.closePath();
-    ctx.fillStyle = darkFill;
-    ctx.fill();
-    ctx.save();
-    ctx.translate(0, -h * 0.22);
-    ctx.beginPath();
-    ctx.moveTo(x + r, y);
-    ctx.arcTo(x + w, y, x + w, y + h, r);
-    ctx.arcTo(x + w, y + h, x, y + h, r);
-    ctx.arcTo(x, y + h, x, y, r);
-    ctx.arcTo(x, y, x + w, y, r);
-    ctx.closePath();
-    ctx.fillStyle = fill;
-    ctx.fill();
-    ctx.restore();
-  }
-
-  function drawSpring(cx, topY) {
-    var w = s(SPRING_W), h = s(20);
-    ctx.strokeStyle = "#e8b400";
-    ctx.lineWidth = s(3);
-    ctx.lineCap = "round";
-    ctx.beginPath();
-    var n = 3;
-    for (var i = 0; i <= n; i++) {
-      var yy = topY - (h * i) / n;
-      var xx = cx + (i % 2 === 0 ? -w / 2 : w / 2);
-      if (i === 0) ctx.moveTo(cx, topY);
-      ctx.lineTo(xx, yy);
-    }
-    ctx.stroke();
-  }
-
-  function drawFish(f) {
-    var sy = f.y - cameraY + Math.sin(f.bob) * s(4);
-    if (sy < -s(30) || sy > H + s(30)) return;
-    ctx.save();
-    ctx.translate(f.x, sy);
-    ctx.fillStyle = "#ffcf6b";
-    ctx.strokeStyle = "#e8912e";
-    ctx.lineWidth = s(1.5);
-    ctx.beginPath();
-    ctx.ellipse(0, 0, s(11), s(6), 0, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.moveTo(s(9), 0);
-    ctx.lineTo(s(16), -s(5));
-    ctx.lineTo(s(16), s(5));
-    ctx.closePath();
-    ctx.fill();
-    ctx.stroke();
-    ctx.fillStyle = "#6b3f12";
-    ctx.beginPath();
-    ctx.arc(-s(5), -s(1), s(1.3), 0, Math.PI * 2);
-    ctx.fill();
-    ctx.restore();
-  }
-
-  function drawCat() {
-    var sy = player.y - cameraY;
-    var w = s(CAT_W), h = s(CAT_H);
-    var squashY = 1 - player.squash * 0.28;
-    var squashX = 1 + player.squash * 0.22;
-
-    ctx.save();
-    ctx.translate(player.x, sy + h / 2);
-    ctx.scale(player.facing * squashX, squashY);
-
-    // tail
-    ctx.strokeStyle = "#f7a65c";
-    ctx.lineWidth = s(5);
-    ctx.lineCap = "round";
-    ctx.beginPath();
-    ctx.moveTo(-w * 0.4, h * 0.1);
-    ctx.quadraticCurveTo(-w * 0.9, h * 0.3, -w * 0.7, -h * 0.35);
-    ctx.stroke();
-
-    // body
-    ctx.fillStyle = "#ffb26b";
-    ctx.beginPath();
-    ctx.ellipse(0, h * 0.08, w * 0.46, h * 0.42, 0, 0, Math.PI * 2);
-    ctx.fill();
-
-    // ears
-    ctx.beginPath();
-    ctx.moveTo(-w * 0.34, -h * 0.28);
-    ctx.lineTo(-w * 0.46, -h * 0.62);
-    ctx.lineTo(-w * 0.14, -h * 0.4);
-    ctx.closePath();
-    ctx.fill();
-    ctx.beginPath();
-    ctx.moveTo(w * 0.34, -h * 0.28);
-    ctx.lineTo(w * 0.46, -h * 0.62);
-    ctx.lineTo(w * 0.14, -h * 0.4);
-    ctx.closePath();
-    ctx.fill();
-
-    ctx.fillStyle = "#ff8fb0";
-    ctx.beginPath();
-    ctx.moveTo(-w * 0.3, -h * 0.32);
-    ctx.lineTo(-w * 0.36, -h * 0.5);
-    ctx.lineTo(-w * 0.18, -h * 0.38);
-    ctx.closePath();
-    ctx.fill();
-    ctx.beginPath();
-    ctx.moveTo(w * 0.3, -h * 0.32);
-    ctx.lineTo(w * 0.36, -h * 0.5);
-    ctx.lineTo(w * 0.18, -h * 0.38);
-    ctx.closePath();
-    ctx.fill();
-
-    // face
-    ctx.fillStyle = "#2b2b2b";
-    ctx.beginPath();
-    ctx.arc(-w * 0.15, -h * 0.02, w * 0.055, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.beginPath();
-    ctx.arc(w * 0.15, -h * 0.02, w * 0.055, 0, Math.PI * 2);
-    ctx.fill();
-
-    ctx.fillStyle = "#ff7a8a";
-    ctx.beginPath();
-    ctx.moveTo(-w * 0.04, h * 0.08);
-    ctx.lineTo(w * 0.04, h * 0.08);
-    ctx.lineTo(0, h * 0.14);
-    ctx.closePath();
-    ctx.fill();
-
-    ctx.strokeStyle = "#8a5a33";
-    ctx.lineWidth = s(1.2);
-    ctx.beginPath();
-    ctx.moveTo(-w * 0.5, h * 0.05); ctx.lineTo(-w * 0.78, h * 0.0);
-    ctx.moveTo(-w * 0.5, h * 0.12); ctx.lineTo(-w * 0.78, h * 0.16);
-    ctx.moveTo(w * 0.5, h * 0.05); ctx.lineTo(w * 0.78, h * 0.0);
-    ctx.moveTo(w * 0.5, h * 0.12); ctx.lineTo(w * 0.78, h * 0.16);
-    ctx.stroke();
-
-    // paws
-    ctx.fillStyle = "#ffb26b";
-    ctx.beginPath();
-    ctx.ellipse(-w * 0.22, h * 0.42, w * 0.14, h * 0.13, 0, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.beginPath();
-    ctx.ellipse(w * 0.22, h * 0.42, w * 0.14, h * 0.13, 0, 0, Math.PI * 2);
-    ctx.fill();
-
-    ctx.restore();
-  }
-
-  function draw() {
-    drawBackground();
-    if (state === STATE_PLAY || state === STATE_OVER) {
-      for (var i = 0; i < platforms.length; i++) drawPlatform(platforms[i]);
-      for (var j = 0; j < fishes.length; j++) if (!fishes[j].taken) drawFish(fishes[j]);
-      drawCat();
-    }
-  }
-
-  // ---------------------------------------------------------------------
-  // Main loop
-  // ---------------------------------------------------------------------
-  var lastT = null;
-  function loop(now) {
-    if (lastT == null) lastT = now;
-    var dt = (now - lastT) / 1000;
-    lastT = now;
-    if (dt > 1 / 30) dt = 1 / 30;
-
-    update(dt);
-    draw();
-
-    requestAnimationFrame(loop);
-  }
-
-  resize();
-  // draw an idle background behind the start screen
-  (function initIdleScene() {
-    cameraY = 0;
-    clouds = [];
-    platforms = [];
-    fishes = [];
-    for (var c = 0; c < 6; c++) {
-      clouds.push({
-        x: Math.random() * W,
-        y: Math.random() * H,
-        r: s(26 + Math.random() * 24),
-        speed: s(6 + Math.random() * 10)
-      });
-    }
-    player = { x: W / 2, y: H * 2, vx: 0, vy: 0, facing: 1, squash: 0 };
-  })();
-  requestAnimationFrame(loop);
 })();
