@@ -58,7 +58,11 @@ var SUPABASE_ANON_KEY = "";  // 填入 publishable key (sb_publishable_...)
 
 仓库 **Settings → Pages → Build and deployment → Source**，从默认的 "Deploy from a branch" 改成 **GitHub Actions**。这样 `.github/workflows/pages-deploy.yml` 才会生效，且只发布 `web/` 目录的内容。
 
+**切换完之后要手动触发一次发布**：切换 Source 这个操作本身不会触发任何 push，`pages-deploy.yml` 只在 `push`（改动了 `web/**`）或手动 `workflow_dispatch` 时才会跑。如果切换时 `web/` 目录没有新的改动要推，去仓库 **Actions** 页面找到 "Deploy game to GitHub Pages"，手动点一次 **Run workflow**（即 `workflow_dispatch`），否则网站会一直停留在"尚未发布"的状态。
+
 ## 6. 首次部署顺序
+
+> 分支名提醒：仓库里所有工作流的 `on: push: branches:` 都写的是 `main`。如果你本地仓库的默认分支叫 `master`（这个项目目前就是），直接 `git push` 不会触发任何工作流——需要推到远端的 `main` 分支，例如 `git push origin master:main`（这里只是说明用法，不要在这一步直接执行，确认好远端仓库和分支名之后再自己手动推）。
 
 1. 先确认 `supabase/` 目录的改动已经推送到 `main`（或手动触发一次 `supabase-deploy.yml` 的 `workflow_dispatch`），等它跑完——这一步会把建表、视图、RLS、三个 RPC 函数、两个 `pg_cron` 定时任务部署到你的 Supabase 项目。
 2. 确认上一步成功后（在 Supabase 控制台 **Table Editor** 应该能看到 `runs`/`score_events`/`leaderboard_best` 三张表），再推 `web/` 目录的改动（或手动触发 `pages-deploy.yml`），把网页发布出去。
