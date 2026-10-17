@@ -7,6 +7,7 @@ language plpgsql
 security definer
 set search_path = public
 as $$
+#variable_conflict use_column
 declare
   v_nickname text;
   v_existing runs;
@@ -77,4 +78,7 @@ begin
 end;
 $$;
 
+-- CREATE FUNCTION 默认会把 EXECUTE 权限隐式授予 PUBLIC，先收回再只授权给
+-- anon/authenticated，避免这个 SECURITY DEFINER 函数被其他角色意外调用。
+revoke execute on function start_run(uuid, text) from public;
 grant execute on function start_run(uuid, text) to anon, authenticated;

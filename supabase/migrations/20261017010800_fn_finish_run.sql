@@ -13,6 +13,7 @@ language plpgsql
 security definer
 set search_path = public
 as $$
+#variable_conflict use_column
 declare
   v_run runs;
   v_valid boolean := true;
@@ -69,4 +70,5 @@ begin
 end;
 $$;
 
+revoke execute on function finish_run(bigint, uuid, integer, integer, integer) from public;
 grant execute on function finish_run(bigint, uuid, integer, integer, integer) to anon, authenticated;

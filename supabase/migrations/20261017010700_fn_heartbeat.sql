@@ -20,6 +20,7 @@ language plpgsql
 security definer
 set search_path = public
 as $$
+#variable_conflict use_column
 declare
   v_run runs;
   v_dt_secs numeric;
@@ -115,6 +116,9 @@ begin
 end;
 $$;
 
+revoke execute on function heartbeat(
+  bigint, uuid, integer, text, integer, integer, integer, integer, integer, integer, numeric, timestamptz
+) from public;
 grant execute on function heartbeat(
   bigint, uuid, integer, text, integer, integer, integer, integer, integer, integer, numeric, timestamptz
 ) to anon, authenticated;
