@@ -478,4 +478,448 @@
     cat.squash = Math.max(0, cat.squash - dt * 4);
   }
 
+  // =======================================================================
+  // Scoring & difficulty
+  // =======================================================================
+
+  var score = 0;
+  var catches = 0, catchesGrey = 0, catchesBrown = 0, catchesGold = 0;
+  var combo = 0, comboTimer = 0, comboMax = 0;
+  var elapsedPlayTime = 0;
+
+  function currentDifficulty() {
+    var byScore = clamp01(score / DIFFICULTY_SCORE_CAP);
+    var byTime = clamp01(elapsedPlayTime / DIFFICULTY_TIME_CAP);
+    return Math.max(byScore, byTime);
+  }
+
+  function maxMice(t) { return Math.round(lerp(5, 10, t)); }
+  function spawnCooldownFor(t) { return lerp(2.2, 0.9, t); }
+
+  function speedMultFor(type, t) {
+    if (type === "brown") return lerp(1.4, 1.6, t);
+    if (type === "gold") return lerp(1.8, 2.1, t);
+    return 1.0;
+  }
+
+  function baseScoreFor(type, t) {
+    if (type === "brown") return 20;
+    if (type === "gold") return Math.round(50 * (1 + 0.5 * t));
+    return 10;
+  }
+
+  function resetScoring() {
+    score = 0; catches = 0; catchesGrey = 0; catchesBrown = 0; catchesGold = 0;
+    combo = 0; comboTimer = 0; comboMax = 0; elapsedPlayTime = 0;
+  }
+
+  function updateComboTimer(dt) {
+    if (comboTimer > 0) {
+      comboTimer -= dt;
+      if (comboTimer <= 0) { comboTimer = 0; combo = 0; }
+    }
+  }
+
+  // =======================================================================
+  // Mouse manager（生成/清理/AI 状态机）
+  // =======================================================================
+
+  var lastMiceSpawnAt = { grey: -999, brown: -999, gold: -999 };
+
+  function countMiceByType(type) {
+    var n = 0;
+    for (var i = 0; i < mice.length; i++) if (mice[i].type === type) n++;
+    return n;
+  }
+
+  function randomAngle() { return Math.random() * Math.PI * 2; }
+
+  function pickSpawnPoint(points) {
+    var buffer = 40;
+    var valid = [];
+    for (var i = 0; i < points.length; i++) {
+      var p = points[i];
+      var sx = worldToScreenX(p.x), sy = worldToScreenY(p.y);
+      if (sx < -buffer || sx > W + buffer || sy < -buffer || sy > H + buffer) valid.push(p);
+    }
+    if (valid.length === 0) return null;
+    return valid[Math.floor(Math.random() * valid.length)];
+  }
+
+  function spawnMouseAt(x, y, type, t) {
+    mice.push({
+      x: x, y: y, vx: 0, vy: 0, r: MOUSE_RADIUS,
+      type: type,
+      speed: BASE_MOUSE_SPEED * speedMultFor(type, t),
+      state: "wander",
+      wanderDir: randomAngle(),
+      wanderTimer: 1 + Math.random() * 2,
+      idleTimer: 0,
+      facing: 0,
+      runCycle: Math.random() * 10,
+      awareBuffer: 0
+    });
+  }
+
+  function trySpawnMouse() {
+    var t = currentDifficulty();
+    if (mice.length >= maxMice(t)) return;
+
+    var type;
+    if (countMiceByType("grey") < MIN_EASY_MICE) {
+      type = "grey";
+    } else {
+      var pool = [{ value: "grey", weight: 2 }];
+      if (t >= 0.2) pool.push({ value: "brown", weight: lerp(0.5, 2.2, clamp01((t - 0.2) / 0.8)) });
+      if (t >= 0.5) pool.push({ value: "gold", weight: lerp(0.3, 1.3, clamp01((t - 0.5) / 0.5)) });
+      type = pickWeighted(Math.random, pool);
+      if (elapsedPlayTime - lastMiceSpawnAt[type] < spawnCooldownFor(t)) return;
+    }
+
+    var points = nearbyMouseSpawnPoints(camera.x, camera.y);
+    var pt = pickSpawnPoint(points);
+    if (!pt) return;
+
+    spawnMouseAt(pt.x, pt.y, type, t);
+    lastMiceSpawnAt[type] = elapsedPlayTime;
+  }
+
+  function rayBlocked(x, y, angle, dist) {
+    var tx = x + Math.cos(angle) * dist, ty = y + Math.sin(angle) * dist;
+    var obstacles = queryNearbyObstacles(x, y);
+    for (var i = 0; i < obstacles.length; i++) {
+      var o = obstacles[i];
+      if (tx >= o.x - 4 && tx <= o.x + o.w + 4 && ty >= o.y - 4 && ty <= o.y + o.h + 4) return true;
+    }
+    return false;
+  }
+
+  function updateMice(dt) {
+    for (var i = mice.length - 1; i >= 0; i--) {
+      var m = mice[i];
+      var dToCat = distance(m.x, m.y, cat.x, cat.y);
+
+      if (m.state === "wander") {
+        if (dToCat < MOUSE_AWARE_R) { m.state = "flee"; m.awareBuffer = 0; }
+      } else if (dToCat > MOUSE_AWARE_R * 1.2) {
+        m.awareBuffer += dt;
+        if (m.awareBuffer > 0.3) m.state = "wander";
+      } else {
+        m.awareBuffer = 0;
+      }
+
+      if (m.state === "flee") {
+        var away = normalize(m.x - cat.x, m.y - cat.y);
+        var desiredAngle = Math.atan2(away.y, away.x);
+        var finalAngle = desiredAngle;
+        if (rayBlocked(m.x, m.y, desiredAngle, m.r * 3)) {
+          var tryAngles = [Math.PI / 6, -Math.PI / 6, Math.PI / 3, -Math.PI / 3];
+          var found = false;
+          for (var a = 0; a < tryAngles.length; a++) {
+            var candidate = desiredAngle + tryAngles[a];
+            if (!rayBlocked(m.x, m.y, candidate, m.r * 3)) { finalAngle = candidate; found = true; break; }
+          }
+          if (!found) finalAngle = desiredAngle + Math.PI / 2;
+        }
+        finalAngle += Math.sin(elapsedPlayTime * 5 + i * 13.7) * 0.25;
+        m.vx = Math.cos(finalAngle) * m.speed;
+        m.vy = Math.sin(finalAngle) * m.speed;
+      } else {
+        m.wanderTimer -= dt;
+        if (m.wanderTimer <= 0) {
+          m.wanderTimer = 1.5 + Math.random() * 2.5;
+          if (Math.random() < 0.45) m.wanderDir = randomAngle();
+          m.idleTimer = Math.random() < 0.4 ? (0.6 + Math.random()) : 0;
+        }
+        if (m.idleTimer > 0) {
+          m.idleTimer -= dt;
+          m.vx = 0; m.vy = 0;
+        } else {
+          m.vx = Math.cos(m.wanderDir) * m.speed * 0.35;
+          m.vy = Math.sin(m.wanderDir) * m.speed * 0.35;
+        }
+      }
+
+      m.x += m.vx * dt;
+      m.y += m.vy * dt;
+
+      var obstacles = queryNearbyObstacles(m.x, m.y);
+      for (var k = 0; k < obstacles.length; k++) resolveCircleAabb(m, obstacles[k]);
+
+      if (m.vx !== 0 || m.vy !== 0) m.facing = Math.atan2(m.vy, m.vx);
+      m.runCycle += dt * (Math.sqrt(m.vx * m.vx + m.vy * m.vy) / 24 + 0.3);
+
+      var dAfter = distance(m.x, m.y, cat.x, cat.y);
+      if (dAfter > MOUSE_CLEANUP_R) { mice.splice(i, 1); continue; }
+      if (dAfter < cat.r + m.r) { onCapture(m); mice.splice(i, 1); }
+    }
+  }
+
+  function onCapture(m) {
+    var t = currentDifficulty();
+    combo += 1;
+    comboTimer = COMBO_WINDOW;
+    if (combo > comboMax) comboMax = combo;
+    var mult = Math.min(1 + combo * COMBO_STEP, COMBO_MAX_MULT);
+    var gained = Math.round(baseScoreFor(m.type, t) * mult);
+    score += gained;
+    catches += 1;
+    if (m.type === "grey") catchesGrey++;
+    else if (m.type === "brown") catchesBrown++;
+    else catchesGold++;
+
+    spawnScorePopup(m.x, m.y, gained);
+    spawnCatchParticles(m.x, m.y);
+    cat.squash = 1;
+    if (m.type === "grey") sfx.catchGrey();
+    else if (m.type === "brown") sfx.catchBrown();
+    else sfx.catchGold();
+    if (combo >= 3) sfx.combo();
+
+    maybeSendHeartbeat(Date.now());
+  }
+
+  // =======================================================================
+  // Particles & score popups
+  // =======================================================================
+
+  var scorePopups = [];
+  var catchParticles = [];
+
+  function spawnScorePopup(x, y, amount) {
+    scorePopups.push({ x: x, y: y, amount: amount, age: 0, life: 0.9 });
+  }
+
+  function spawnCatchParticles(x, y) {
+    for (var i = 0; i < 5; i++) {
+      var a = Math.random() * Math.PI * 2;
+      var sp = 40 + Math.random() * 40;
+      catchParticles.push({ x: x, y: y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, age: 0, life: 0.3 + Math.random() * 0.1 });
+    }
+  }
+
+  function updateEffects(dt) {
+    var i;
+    for (i = scorePopups.length - 1; i >= 0; i--) {
+      var p = scorePopups[i];
+      p.age += dt;
+      p.y -= dt * 30;
+      if (p.age >= p.life) scorePopups.splice(i, 1);
+    }
+    for (i = catchParticles.length - 1; i >= 0; i--) {
+      var c = catchParticles[i];
+      c.age += dt;
+      c.x += c.vx * dt;
+      c.y += c.vy * dt;
+      if (c.age >= c.life) catchParticles.splice(i, 1);
+    }
+  }
+
+  // =======================================================================
+  // Render
+  // =======================================================================
+
+  var MOUSE_COLORS = { grey: "#9a9a9a", brown: "#a9703f", gold: "#f1c232" };
+
+  function roundRectPath(x, y, w, h, r) {
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.arcTo(x + w, y, x + w, y + h, r);
+    ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r);
+    ctx.arcTo(x, y, x + w, y, r);
+    ctx.closePath();
+  }
+
+  function visibleChunkRange() {
+    var halfW = W / (2 * SCALE) + CHUNK_SIZE;
+    var halfH = H / (2 * SCALE) + CHUNK_SIZE;
+    var topLeft = worldToChunk(camera.x - halfW, camera.y - halfH);
+    var bottomRight = worldToChunk(camera.x + halfW, camera.y + halfH);
+    return { cx0: topLeft.cx, cy0: topLeft.cy, cx1: bottomRight.cx, cy1: bottomRight.cy };
+  }
+
+  function forEachVisibleChunk(fn) {
+    var range = visibleChunkRange();
+    for (var cy = range.cy0; cy <= range.cy1; cy++) {
+      for (var cx = range.cx0; cx <= range.cx1; cx++) {
+        var chunk = chunkCache.get(chunkKey(cx, cy));
+        if (chunk) fn(chunk);
+      }
+    }
+  }
+
+  function drawBackground() {
+    ctx.fillStyle = "#8fcf6b";
+    ctx.fillRect(0, 0, W, H);
+    forEachVisibleChunk(function (chunk) {
+      for (var i = 0; i < chunk.decor.length; i++) drawDecor(chunk.decor[i]);
+    });
+  }
+
+  function drawDecor(d) {
+    var sx = worldToScreenX(d.x), sy = worldToScreenY(d.y);
+    if (sx < -20 || sx > W + 20 || sy < -20 || sy > H + 20) return;
+    ctx.save();
+    ctx.translate(sx, sy);
+    ctx.rotate(d.rot);
+    ctx.scale(d.scale * SCALE, d.scale * SCALE);
+    if (d.kind === "grass") {
+      ctx.strokeStyle = "rgba(60,120,40,0.55)";
+      ctx.lineWidth = 2;
+      for (var k = -1; k <= 1; k++) {
+        ctx.beginPath();
+        ctx.moveTo(k * 3, 0);
+        ctx.quadraticCurveTo(k * 5, -6, k * 2, -11);
+        ctx.stroke();
+      }
+    } else if (d.kind === "flower") {
+      ctx.fillStyle = "rgba(255,255,255,0.8)";
+      for (var p = 0; p < 4; p++) {
+        ctx.beginPath();
+        ctx.ellipse(Math.cos(p * Math.PI / 2) * 3, Math.sin(p * Math.PI / 2) * 3, 2.6, 1.8, p * Math.PI / 2, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.fillStyle = "#ffd977";
+      ctx.beginPath(); ctx.arc(0, 0, 1.8, 0, Math.PI * 2); ctx.fill();
+    } else {
+      ctx.fillStyle = "rgba(255,255,255,0.35)";
+      ctx.beginPath();
+      ctx.ellipse(0, 0, 4, 3, 0, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  function drawObstacles() {
+    forEachVisibleChunk(function (chunk) {
+      for (var i = 0; i < chunk.obstacles.length; i++) drawObstacle(chunk.obstacles[i]);
+    });
+  }
+
+  function drawObstacle(o) {
+    var sx = worldToScreenX(o.x), sy = worldToScreenY(o.y);
+    var sw = o.w * SCALE, sh = o.h * SCALE;
+    if (sx + sw < -20 || sx > W + 20 || sy + sh < -20 || sy > H + 20) return;
+    ctx.save();
+    if (o.kind === "crate") {
+      ctx.fillStyle = "#c58a4a";
+      roundRectPath(sx, sy, sw, sh, 4);
+      ctx.fill();
+      ctx.strokeStyle = "#8a5a28";
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(sx, sy + sh / 2); ctx.lineTo(sx + sw, sy + sh / 2);
+      ctx.moveTo(sx + sw / 2, sy); ctx.lineTo(sx + sw / 2, sy + sh);
+      ctx.stroke();
+    } else if (o.kind === "bush") {
+      ctx.fillStyle = "#4f8f3d";
+      var r = Math.min(sw, sh) / 2;
+      ctx.beginPath(); ctx.arc(sx + sw * 0.3, sy + sh * 0.6, r * 0.8, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.arc(sx + sw * 0.7, sy + sh * 0.6, r * 0.8, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.arc(sx + sw * 0.5, sy + sh * 0.35, r * 0.9, 0, Math.PI * 2); ctx.fill();
+    } else {
+      ctx.fillStyle = "#9a9a92";
+      roundRectPath(sx, sy, sw, sh, sw * 0.3);
+      ctx.fill();
+      ctx.strokeStyle = "rgba(255,255,255,0.4)";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(sx + sw * 0.35, sy + sh * 0.35, sw * 0.18, 0, Math.PI);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  function facing8(angle) { return Math.round(angle / (Math.PI / 4)) * (Math.PI / 4); }
+
+  function drawQuadruped(x, y, r, angle, runCycle, bodyColor, earColor, squash) {
+    var dir = facing8(angle);
+    var legPhase = Math.sin(runCycle) * r * 0.35;
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(dir);
+    var bodyW = r * 1.5 * (1 + (squash || 0) * 0.3);
+    var bodyH = r * 1.0 * (1 - (squash || 0) * 0.25);
+
+    ctx.fillStyle = "rgba(0,0,0,0.15)";
+    ctx.beginPath();
+    ctx.ellipse(0, bodyH * 0.65, bodyW * 0.5, bodyH * 0.22, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = bodyColor;
+    ctx.beginPath();
+    ctx.ellipse(-legPhase * 0.4, bodyH * 0.55, r * 0.22, r * 0.22, 0, 0, Math.PI * 2);
+    ctx.ellipse(legPhase * 0.4, bodyH * 0.55, r * 0.22, r * 0.22, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.beginPath();
+    ctx.ellipse(0, 0, bodyW * 0.55, bodyH * 0.5, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.beginPath();
+    ctx.moveTo(-bodyW * 0.75, bodyH * 0.1);
+    ctx.quadraticCurveTo(-bodyW * 1.1, bodyH * 0.5, -bodyW * 0.85, bodyH * 0.65);
+    ctx.lineWidth = Math.max(1, r * 0.18);
+    ctx.strokeStyle = bodyColor;
+    ctx.stroke();
+
+    ctx.fillStyle = earColor || bodyColor;
+    ctx.beginPath();
+    ctx.moveTo(bodyW * 0.25, -bodyH * 0.35);
+    ctx.lineTo(bodyW * 0.45, -bodyH * 0.75);
+    ctx.lineTo(bodyW * 0.55, -bodyH * 0.25);
+    ctx.closePath();
+    ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(bodyW * 0.5, -bodyH * 0.2);
+    ctx.lineTo(bodyW * 0.75, -bodyH * 0.55);
+    ctx.lineTo(bodyW * 0.75, -bodyH * 0.05);
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.fillStyle = "#2a2a2a";
+    ctx.beginPath();
+    ctx.arc(bodyW * 0.42, -bodyH * 0.08, Math.max(1, r * 0.08), 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.restore();
+  }
+
+  function drawCat() {
+    drawQuadruped(worldToScreenX(cat.x), worldToScreenY(cat.y), s(CAT_RADIUS), cat.facing, cat.runCycle, "#ff9d5c", "#ffb27a", cat.squash);
+  }
+
+  function drawMice() {
+    for (var i = 0; i < mice.length; i++) {
+      var m = mice[i];
+      var sx = worldToScreenX(m.x), sy = worldToScreenY(m.y);
+      if (sx < -40 || sx > W + 40 || sy < -40 || sy > H + 40) continue;
+      drawQuadruped(sx, sy, s(MOUSE_RADIUS), m.facing, m.runCycle, MOUSE_COLORS[m.type], MOUSE_COLORS[m.type], 0);
+    }
+  }
+
+  function drawEffects() {
+    var i;
+    for (i = 0; i < catchParticles.length; i++) {
+      var c = catchParticles[i];
+      var sx = worldToScreenX(c.x), sy = worldToScreenY(c.y);
+      var alpha = Math.max(0, 1 - c.age / c.life);
+      ctx.fillStyle = "rgba(255,255,255," + alpha + ")";
+      ctx.beginPath();
+      ctx.arc(sx, sy, 3 * alpha + 1, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.textAlign = "center";
+    ctx.font = "bold " + s(16) + "px sans-serif";
+    for (i = 0; i < scorePopups.length; i++) {
+      var p = scorePopups[i];
+      var sx2 = worldToScreenX(p.x), sy2 = worldToScreenY(p.y);
+      var a = Math.max(0, 1 - p.age / p.life);
+      ctx.fillStyle = "rgba(255,255,255," + a + ")";
+      ctx.fillText("+" + p.amount, sx2, sy2 - 20);
+    }
+  }
+
 })();
