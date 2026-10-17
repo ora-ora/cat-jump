@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, minimum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#87ceeb">
+<title>小猫跳跳 Cat Jump</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="app">
+  <canvas id="game"></canvas>
+
+  <div id="hud">
+    <div id="score">0</div>
+  </div>
+
+  <button id="muteBtn" class="icon-btn" aria-label="静音切换">🔊</button>
+
+  <div id="startScreen" class="overlay">
+    <div class="panel">
+      <h1>🐱 小猫跳跳</h1>
+      <p class="subtitle">CAT JUMP</p>
+      <div class="cat-preview">🐱</div>
+      <p class="hint">
+        按住屏幕左半边 / 右半边移动，或左右拖动手指<br>
+        踩着平台一直往上跳吧！掉出屏幕就结束啦<br>
+        桌面端可用 ← → 或 A / D 键移动
+      </p>
+      <button id="startBtn" class="btn-primary">开始游戏</button>
+      <p class="best">最高分：<span id="bestScoreStart">0</span></p>
+    </div>
+  </div>
+
+  <div id="gameOverScreen" class="overlay hidden">
+    <div class="panel">
+      <h1>游戏结束</h1>
+      <p class="score-line">本次得分：<span id="finalScore">0</span></p>
+      <p class="best">最高分：<span id="bestScoreEnd">0</span></p>
+      <button id="restartBtn" class="btn-primary">再来一次</button>
+    </div>
+  </div>
+</div>
+<script src="game.js"></script>
+</body>
+</html>
