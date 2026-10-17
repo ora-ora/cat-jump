@@ -3,41 +3,89 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, minimum-scale=1, user-scalable=no, viewport-fit=cover">
-<meta name="theme-color" content="#87ceeb">
-<title>小猫跳跳 Cat Jump</title>
+<meta name="theme-color" content="#8fcf6b">
+<title>小猫抓老鼠 Cat Mouse Chase</title>
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
 <div id="app">
   <canvas id="game"></canvas>
 
-  <div id="hud">
-    <div id="score">0</div>
-  </div>
-
-  <button id="muteBtn" class="icon-btn" aria-label="静音切换">🔊</button>
-
-  <div id="startScreen" class="overlay">
-    <div class="panel">
-      <h1>🐱 小猫跳跳</h1>
-      <p class="subtitle">CAT JUMP</p>
-      <div class="cat-preview">🐱</div>
-      <p class="hint">
-        按住屏幕左半边 / 右半边移动，或左右拖动手指<br>
-        踩着平台一直往上跳吧！掉出屏幕就结束啦<br>
-        桌面端可用 ← → 或 A / D 键移动
-      </p>
-      <button id="startBtn" class="btn-primary">开始游戏</button>
-      <p class="best">最高分：<span id="bestScoreStart">0</span></p>
+  <div id="hud" class="hidden">
+    <div id="hudLeft">
+      <div id="scoreText">0</div>
+      <div id="comboText" class="hidden"></div>
+      <div id="rankText">排名：--</div>
+    </div>
+    <div id="hudRight">
+      <button id="pauseBtn" class="icon-btn" aria-label="暂停">⏸</button>
+      <button id="muteBtn" class="icon-btn" aria-label="静音切换">🔊</button>
+      <button id="endRunBtn" class="btn-end">结束本局</button>
     </div>
   </div>
 
-  <div id="gameOverScreen" class="overlay hidden">
+  <div id="startScreen" class="overlay">
     <div class="panel">
-      <h1>游戏结束</h1>
-      <p class="score-line">本次得分：<span id="finalScore">0</span></p>
-      <p class="best">最高分：<span id="bestScoreEnd">0</span></p>
-      <button id="restartBtn" class="btn-primary">再来一次</button>
+      <h1>🐱 小猫抓老鼠</h1>
+      <p class="subtitle">CAT MOUSE CHASE</p>
+      <div class="cat-preview">🐱🐭</div>
+      <p class="hint">
+        点击/按住屏幕任意方向移动小猫，靠近老鼠自动抓住它！<br>
+        不限时，想玩多久玩多久，随时可以结束本局去排行榜上争名次。<br>
+        桌面端可用方向键 / WASD 移动。
+      </p>
+      <p class="best">历史最高分：<span id="bestScoreStart">0</span></p>
+      <label class="nickname-label" for="nicknameInput">昵称
+        <input id="nicknameInput" type="text" maxlength="12" placeholder="给自己起个昵称吧" autocomplete="off">
+      </label>
+      <button id="startBtn" class="btn-primary">开始游戏</button>
+      <button id="showLeaderboardBtnStart" class="btn-secondary">查看排行榜</button>
+    </div>
+  </div>
+
+  <div id="pauseScreen" class="overlay hidden">
+    <div class="panel">
+      <h2>已暂停</h2>
+      <button id="resumeBtn" class="btn-primary">继续</button>
+    </div>
+  </div>
+
+  <div id="confirmEndScreen" class="overlay hidden">
+    <div class="panel">
+      <h2>确定结束本局吗？</h2>
+      <p class="hint">本局数据会被冻结并自动结算，游戏不会自动结束，误触可以取消。</p>
+      <button id="confirmEndYesBtn" class="btn-primary">结束本局</button>
+      <button id="confirmEndNoBtn" class="btn-secondary">继续游戏</button>
+    </div>
+  </div>
+
+  <div id="resultScreen" class="overlay hidden">
+    <div class="panel">
+      <h2>本局结算</h2>
+      <div class="result-stats">
+        <div>得分：<span id="resultScore">0</span></div>
+        <div>捕获数：<span id="resultCatches">0</span></div>
+        <div>游玩时长：<span id="resultDuration">0</span> 秒</div>
+        <div>本局最高连击：x<span id="resultCombo">0</span></div>
+        <div>历史最高分：<span id="resultBest">0</span></div>
+      </div>
+      <div id="resultRankStatus">结算中…</div>
+      <label class="nickname-label" for="nicknameInputResult">昵称（下一局生效）
+        <input id="nicknameInputResult" type="text" maxlength="12" autocomplete="off">
+      </label>
+      <div class="btn-row">
+        <button id="showLeaderboardBtnResult" class="btn-secondary">查看排行榜</button>
+        <button id="restartBtn" class="btn-primary">再来一局</button>
+      </div>
+      <button id="homeBtn" class="btn-secondary">返回首页</button>
+    </div>
+  </div>
+
+  <div id="leaderboardScreen" class="overlay hidden">
+    <div class="panel">
+      <h2>排行榜</h2>
+      <div id="leaderboardList" class="leaderboard-list"></div>
+      <button id="leaderboardCloseBtn" class="btn-secondary">关闭</button>
     </div>
   </div>
 </div>
