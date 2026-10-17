@@ -1,0 +1,20 @@
+name: Keep Supabase project awake
+
+on:
+  schedule:
+    - cron: "0 0 */3 * *" # 每 3 天一次，早于 7 天无活动自动暂停的阈值留足余量
+  workflow_dispatch: {}
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Query leaderboard_live (read-only, keeps the project active)
+        run: |
+          curl -sf "${SUPABASE_URL}/rest/v1/leaderboard_live?select=nickname&limit=1" \
+            -H "apikey: ${SUPABASE_ANON_KEY}" \
+            -H "Authorization: Bearer ${SUPABASE_ANON_KEY}" \
+            -o /dev/null
+        env:
+          SUPABASE_URL: ${{ vars.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ vars.SUPABASE_ANON_KEY }}
