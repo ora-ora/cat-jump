@@ -7,6 +7,9 @@ on:
       - "supabase/**"
   workflow_dispatch: {}
 
+permissions:
+  contents: read
+
 concurrency:
   group: supabase-deploy-production
   cancel-in-progress: false

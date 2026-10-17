@@ -8,6 +8,9 @@ on:
   workflow_dispatch: {}
 
 permissions:
+  # 显式声明 permissions 会把其余权限隐式设为 none；actions/checkout 需要
+  # contents: read 才能正常拉取仓库，所以要和 pages/id-token 一起列出来。
+  contents: read
   pages: write
   id-token: write
 
