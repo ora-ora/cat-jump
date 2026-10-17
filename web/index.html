@@ -37,6 +37,7 @@
       <label class="nickname-label" for="nicknameInput">昵称
         <input id="nicknameInput" type="text" maxlength="12" placeholder="给自己起个昵称吧" autocomplete="off">
       </label>
+      <p class="nickname-hint hidden" id="nicknameHint">昵称包含不当词语，将使用默认昵称</p>
       <button id="startBtn" class="btn-primary">开始游戏</button>
       <button id="showLeaderboardBtnStart" class="btn-secondary">查看排行榜</button>
     </div>
@@ -73,6 +74,7 @@
       <label class="nickname-label" for="nicknameInputResult">昵称（下一局生效）
         <input id="nicknameInputResult" type="text" maxlength="12" autocomplete="off">
       </label>
+      <p class="nickname-hint hidden" id="nicknameHintResult">昵称包含不当词语，将使用默认昵称</p>
       <div class="btn-row">
         <button id="showLeaderboardBtnResult" class="btn-secondary">查看排行榜</button>
         <button id="restartBtn" class="btn-primary">再来一局</button>

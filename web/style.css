@@ -259,6 +259,17 @@ html, body {
   border-color: #ff7a45;
 }
 
+.nickname-hint {
+  margin: -2px 0 4px;
+  font-size: 12px;
+  color: #d1442c;
+  text-align: left;
+}
+
+.nickname-hint.hidden {
+  display: none;
+}
+
 .result-stats {
   text-align: left;
   font-size: 14px;

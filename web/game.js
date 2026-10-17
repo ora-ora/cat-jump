@@ -1133,6 +1133,48 @@
     return cleaned.slice(0, 12);
   }
 
+  // 镜像 supabase/migrations/20261018070000_nickname_blacklist_v2.sql 里的
+  // nickname_is_offensive()：同一套规范化步骤（转小写、去分隔符、leet 替换、
+  // 压缩重复字母）+ 同一份词表。两处改一处记得同步另一处。这里只是提前给
+  // 用户一个提示，真正兜底仍由服务端 start_run() 决定存成什么昵称。
+  var NICKNAME_OFFENSIVE_PATTERN = new RegExp(
+    "(傻x|傻逼|白痴|管理员|客服|官方)|" +
+    "(fuk|fuck|fck|shit|sht|bitch|cunt|dick|cock|pussy|asshole|bastard|slut|" +
+    "whore|nigger|nigga|faggot|fag|retard|rape|nazi|hitler|porn|sex|kys|" +
+    "twat|wanker|admin|system|supabase)"
+  );
+
+  function normalizeForOffensiveCheck(raw) {
+    var v = String(raw || "").toLowerCase();
+    v = v.replace(/[ _.\-]/g, "");
+    var leet = { "0": "o", "1": "i", "3": "e", "4": "a", "5": "s", "7": "t", "@": "a", "$": "s", "!": "i" };
+    v = v.replace(/[013457@$!]/g, function (c) { return leet[c] || c; });
+    v = v.replace(/(.)\1+/g, "$1");
+    return v;
+  }
+
+  function isNicknameOffensive(raw) {
+    var v = normalizeForOffensiveCheck(raw);
+    return v !== "" && NICKNAME_OFFENSIVE_PATTERN.test(v);
+  }
+
+  // 在输入框失焦（blur）或真正提交（beginRun/切换昵称）时调用：命中就把
+  // 输入框清空、显示提示文字，并返回空字符串交给调用方——提交给
+  // start_run() 时空昵称会被服务端回退成"匿名猫+随机数字"，前后端不需要
+  // 各自维护一套随机数生成逻辑也能保持结果一致。不在每次按键时都做这个
+  // 检查，否则打到一半的词（比如正在打"Essex"打到"sex"那一刻）就会被
+  // 整个清空，体验很差。
+  function enforceNicknameNotOffensive(inputEl, hintEl) {
+    var value = inputEl.value;
+    if (isNicknameOffensive(value)) {
+      inputEl.value = "";
+      hintEl.classList.remove("hidden");
+      return "";
+    }
+    hintEl.classList.add("hidden");
+    return value;
+  }
+
   function loadTopScores() {
     dom.leaderboardList.innerHTML = '<div class="lb-loading">加载中…</div>';
     if (!backendConfigured) {
@@ -1174,6 +1216,7 @@
     startScreen: document.getElementById("startScreen"),
     bestScoreStart: document.getElementById("bestScoreStart"),
     nicknameInput: document.getElementById("nicknameInput"),
+    nicknameHint: document.getElementById("nicknameHint"),
     startBtn: document.getElementById("startBtn"),
     showLeaderboardBtnStart: document.getElementById("showLeaderboardBtnStart"),
     pauseScreen: document.getElementById("pauseScreen"),
@@ -1189,6 +1232,7 @@
     resultBest: document.getElementById("resultBest"),
     resultRankStatus: document.getElementById("resultRankStatus"),
     nicknameInputResult: document.getElementById("nicknameInputResult"),
+    nicknameHintResult: document.getElementById("nicknameHintResult"),
     showLeaderboardBtnResult: document.getElementById("showLeaderboardBtnResult"),
     restartBtn: document.getElementById("restartBtn"),
     homeBtn: document.getElementById("homeBtn"),
@@ -1213,12 +1257,13 @@
     hideScreen(dom.confirmEndScreen);
     dom.bestScoreStart.textContent = String(best);
     dom.nicknameInput.value = storageGet("catmouse_nickname", "");
+    dom.nicknameHint.classList.add("hidden");
     showScreen(dom.startScreen);
   }
 
   function beginRun() {
     ensureAudio();
-    var nickname = dom.nicknameInput.value.trim();
+    var nickname = enforceNicknameNotOffensive(dom.nicknameInput, dom.nicknameHint).trim();
     storageSet("catmouse_nickname", nickname);
     hideScreen(dom.startScreen);
     showScreen(dom.hud);
@@ -1272,6 +1317,7 @@
     dom.resultBest.textContent = String(best);
     dom.resultRankStatus.textContent = "结算中…";
     dom.nicknameInputResult.value = storageGet("catmouse_nickname", "");
+    dom.nicknameHintResult.classList.add("hidden");
     showScreen(dom.resultScreen);
     sfx.endRun();
     finishRun();
@@ -1299,11 +1345,18 @@
   dom.nicknameInput.addEventListener("input", function () {
     dom.nicknameInput.value = sanitizeNickname(dom.nicknameInput.value);
   });
+  dom.nicknameInput.addEventListener("blur", function () {
+    enforceNicknameNotOffensive(dom.nicknameInput, dom.nicknameHint);
+  });
   dom.nicknameInputResult.addEventListener("input", function () {
     dom.nicknameInputResult.value = sanitizeNickname(dom.nicknameInputResult.value);
   });
+  dom.nicknameInputResult.addEventListener("blur", function () {
+    enforceNicknameNotOffensive(dom.nicknameInputResult, dom.nicknameHintResult);
+  });
   dom.nicknameInputResult.addEventListener("change", function () {
-    storageSet("catmouse_nickname", dom.nicknameInputResult.value.trim());
+    var nickname = enforceNicknameNotOffensive(dom.nicknameInputResult, dom.nicknameHintResult).trim();
+    storageSet("catmouse_nickname", nickname);
   });
   dom.showLeaderboardBtnStart.addEventListener("click", openLeaderboard);
   dom.showLeaderboardBtnResult.addEventListener("click", openLeaderboard);
