@@ -1130,13 +1130,24 @@
         // 上传成功。
         dom.resultRankStatus.textContent = "未能连接排行榜，成绩未上传";
       } else if (res.ok && res.rank != null) {
+        // rank 是按玩家历史最佳算的名次，run_rank 是按*这一局*结算分算的
+        // 名次——本局分数没有刷新个人最佳时两者会不一样（比如历史最佳
+        // 360 分排第 1，这一局结算成 42 分在全榜里只能排第 6），只显示
+        // rank 会让玩家误以为这一局排第 1。两者相同时（这一局就是/刷新了
+        // 个人最佳）只用一个数字，不用重复说两遍。
+        var sameRank = res.run_rank === res.rank;
+        var rankText = sameRank
+          ? ("你是第 " + res.rank + " 名！")
+          : ("本局排名第 " + res.run_rank + " 名；你的最好成绩排名第 " + res.rank + " 名");
         if (res.adjusted) {
           // 服务端没采信这次提交的数字，改用最后一次被接受心跳的状态结算，
           // 但确实已经写进了排行榜——不能说"未上传"，要说清楚结算的是
           // 哪个分数。
-          dom.resultRankStatus.textContent = "成绩已按服务器记录结算：" + res.final_score + " 分，你是第 " + res.rank + " 名！";
+          dom.resultRankStatus.textContent = sameRank
+            ? ("成绩已按服务器记录结算：" + res.final_score + " 分，" + rankText)
+            : ("成绩已按服务器记录结算：" + res.final_score + " 分（" + rankText + "）");
         } else {
-          dom.resultRankStatus.textContent = "你是第 " + res.rank + " 名！";
+          dom.resultRankStatus.textContent = rankText;
         }
       } else {
         // 后端正常响应了，只是这次调用本身被判定无效（比如 invalid_run），
