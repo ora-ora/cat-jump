@@ -1236,8 +1236,8 @@
     return cleaned.slice(0, 12);
   }
 
-  // 镜像 supabase/migrations/20261018080000_nickname_leet_and_falsepos_fix.sql
-  // 里的 nickname_is_offensive()：同一套规范化（转小写、leet 替换、压缩
+  // 镜像 supabase/migrations/20261018100000_nickname_substring_regression_fix.sql
+  // 里最新版的 nickname_is_offensive()：同一套规范化（转小写、leet 替换、压缩
   // 重复字母）、同一份词表分层（短/易误伤词整词匹配、长词子串匹配、安全词
   // 白名单）。两处改一处记得同步另一处。这里只是提前给用户一个提示，真正
   // 兜底仍由服务端 start_run() 决定存成什么昵称。
@@ -1276,13 +1276,17 @@
     var glued = v.replace(/[ _.\-]/g, "");
     if (NICKNAME_WHOLE_WORDS.indexOf(glued) !== -1) return true;
 
-    // 子串匹配：先挖掉安全词，再检查长词表。
+    // 子串匹配：先挖掉安全词，再检查长词表。要同时检查"分隔符折叠成
+    // 空格"的串和"分隔符全部删掉"的串，否则 "f u c k" / "sh it" /
+    // "F.U.C.K" 这种在字母间插分隔符的写法会漏网。
     var collapsed = v.replace(/[ _.\-]+/g, " ").trim();
-    var scrubbed = collapsed;
+    var scrubbedCollapsed = collapsed;
+    var scrubbedGlued = glued;
     for (i = 0; i < NICKNAME_SAFE_WORDS.length; i++) {
-      scrubbed = scrubbed.split(NICKNAME_SAFE_WORDS[i]).join("");
+      scrubbedCollapsed = scrubbedCollapsed.split(NICKNAME_SAFE_WORDS[i]).join("");
+      scrubbedGlued = scrubbedGlued.split(NICKNAME_SAFE_WORDS[i]).join("");
     }
-    if (NICKNAME_SUBSTRING_PATTERN.test(scrubbed)) return true;
+    if (NICKNAME_SUBSTRING_PATTERN.test(scrubbedCollapsed) || NICKNAME_SUBSTRING_PATTERN.test(scrubbedGlued)) return true;
 
     if (NICKNAME_CHINESE_PATTERN.test(collapsed)) return true;
 
