@@ -1236,60 +1236,62 @@
     return cleaned.slice(0, 12);
   }
 
-  // 镜像 supabase/migrations/20261018100000_nickname_substring_regression_fix.sql
-  // 里最新版的 nickname_is_offensive()：同一套规范化（转小写、leet 替换、压缩
-  // 重复字母）、同一份词表分层（短/易误伤词整词匹配、长词子串匹配、安全词
-  // 白名单）。两处改一处记得同步另一处。这里只是提前给用户一个提示，真正
-  // 兜底仍由服务端 start_run() 决定存成什么昵称。
+  // 镜像 supabase/migrations/20261018230000_nickname_double_letter_fix.sql
+  // 里最新版的 nickname_is_offensive()：两处改一处须同步另一处。这里只是
+  // 提前给用户一个提示，真正兜底仍由服务端 start_run() 决定存成什么昵称。
+  //
+  // 输入同时生成两种形式，分别和对应形式的词表比较：
+  //   two：3 个及以上的重复压成 2 个（"a$$$hole" -> "asshole"），对原样词表；
+  //   one：所有重复压成 1 个（"fuuuck" -> "fuck"），对同样压缩过的词表。
+  // 短/易误伤词只做整词匹配；长词做子串匹配（分隔符折叠串和无分隔符串都查，
+  // 先剔除安全词）。
   var NICKNAME_WHOLE_WORDS = ["sex", "dick", "fag", "kys", "cock", "rape", "porn", "sht", "fck", "fuk", "cunt"];
-  var NICKNAME_SUBSTRING_PATTERN = /fuck|shit|bitch|pussy|asshole|bastard|slut|whore|nigger|nigga|faggot|retard|nazi|hitler|twat|wanker|admin|system|supabase/;
+  var NICKNAME_SUBSTRING_WORDS = [
+    "fuck", "shit", "bitch", "pussy", "asshole", "bastard", "slut", "whore",
+    "nigger", "nigga", "faggot", "retard", "nazi", "hitler", "twat", "wanker",
+    "admin", "system", "supabase"
+  ];
   var NICKNAME_SAFE_WORDS = [
     "scunthorpe", "essex", "sussex", "middlesex", "dickens", "dickson", "cockburn",
     "hancock", "peacock", "shitake", "shiitake", "grape", "therapist", "assassin",
-    "class", "pass", "bass"
+    "class", "pass", "bass", "niger", "nigeria", "nigerian"
   ];
   var NICKNAME_CHINESE_PATTERN = /傻x|傻逼|白痴|管理员|客服|官方/;
 
-  function leetNormalize(raw) {
-    var v = String(raw || "").toLowerCase();
+  function collapseRepeats(v) { return v.replace(/(.)\1+/g, "$1"); }
+
+  function nicknameForms(raw) {
     var leet = { "0": "o", "1": "i", "3": "e", "4": "a", "5": "s", "7": "t", "@": "a", "$": "s", "!": "i" };
-    v = v.replace(/[013457@$!]/g, function (c) { return leet[c] || c; });
-    v = v.replace(/(.)\1+/g, "$1");
-    return v;
+    var base = String(raw || "").toLowerCase().replace(/[013457@$!]/g, function (c) { return leet[c] || c; });
+    return [
+      { form: base.replace(/(.)\1\1+/g, "$1$1"), whole: NICKNAME_WHOLE_WORDS, sub: NICKNAME_SUBSTRING_WORDS, safe: NICKNAME_SAFE_WORDS },
+      { form: collapseRepeats(base), whole: NICKNAME_WHOLE_WORDS.map(collapseRepeats),
+        sub: NICKNAME_SUBSTRING_WORDS.map(collapseRepeats), safe: NICKNAME_SAFE_WORDS.map(collapseRepeats) }
+    ];
   }
 
   function isNicknameOffensive(raw) {
-    var v = leetNormalize(raw);
-    if (v === "") return false;
-
-    // 整词匹配 1/2：按空格/_/-/. 切分词元（不按数字切分，理由同 SQL 侧：
-    // 数字常常是 leet 替换剩下的尾巴，比如 "bitch99"，按数字切开会把
-    // "b1tch" 拆散，反而破坏 leet 还原）。
-    var toks = v.split(/[ _.\-]+/);
-    var i;
-    for (i = 0; i < toks.length; i++) {
-      if (toks[i] !== "" && NICKNAME_WHOLE_WORDS.indexOf(toks[i]) !== -1) return true;
+    if (String(raw || "") === "") return false;
+    var forms = nicknameForms(raw);
+    for (var f = 0; f < forms.length; f++) {
+      var F = forms[f], i;
+      var toks = F.form.split(/[ _.\-]+/);
+      for (i = 0; i < toks.length; i++) {
+        if (toks[i] !== "" && F.whole.indexOf(toks[i]) !== -1) return true;
+      }
+      var glued = F.form.replace(/[ _.\-]/g, "");
+      if (F.whole.indexOf(glued) !== -1) return true;
+      var collapsed = F.form.replace(/[ _.\-]+/g, " ").trim();
+      var sc = collapsed, sg = glued;
+      for (i = 0; i < F.safe.length; i++) {
+        sc = sc.split(F.safe[i]).join("");
+        sg = sg.split(F.safe[i]).join("");
+      }
+      for (i = 0; i < F.sub.length; i++) {
+        if (sc.indexOf(F.sub[i]) !== -1 || sg.indexOf(F.sub[i]) !== -1) return true;
+      }
+      if (NICKNAME_CHINESE_PATTERN.test(collapsed)) return true;
     }
-
-    // 整词匹配 2/2：分隔符整个删掉再整体比较，堵住 "s-e-x" 这种按词元切分
-    // 会被拆散的写法。
-    var glued = v.replace(/[ _.\-]/g, "");
-    if (NICKNAME_WHOLE_WORDS.indexOf(glued) !== -1) return true;
-
-    // 子串匹配：先挖掉安全词，再检查长词表。要同时检查"分隔符折叠成
-    // 空格"的串和"分隔符全部删掉"的串，否则 "f u c k" / "sh it" /
-    // "F.U.C.K" 这种在字母间插分隔符的写法会漏网。
-    var collapsed = v.replace(/[ _.\-]+/g, " ").trim();
-    var scrubbedCollapsed = collapsed;
-    var scrubbedGlued = glued;
-    for (i = 0; i < NICKNAME_SAFE_WORDS.length; i++) {
-      scrubbedCollapsed = scrubbedCollapsed.split(NICKNAME_SAFE_WORDS[i]).join("");
-      scrubbedGlued = scrubbedGlued.split(NICKNAME_SAFE_WORDS[i]).join("");
-    }
-    if (NICKNAME_SUBSTRING_PATTERN.test(scrubbedCollapsed) || NICKNAME_SUBSTRING_PATTERN.test(scrubbedGlued)) return true;
-
-    if (NICKNAME_CHINESE_PATTERN.test(collapsed)) return true;
-
     return false;
   }
 
