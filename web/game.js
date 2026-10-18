@@ -377,9 +377,15 @@
   var MOUSE_RADIUS = 12;
   var BASE_MOUSE_SPEED = 70;
 
+  // 正面撞上障碍物时的自动绕行：圆-AABB 推出只沿碰撞法线方向顶回去，垂直
+  // 撞上一块平面时切向分量恰好是 0，猫会卡住不动（第四轮审核：往右长按
+  // 4 秒只走了 131px）。下面两个常量控制"判定为被卡住"的阈值与绕行速度。
+  var COLLISION_SLIDE_BLOCK_RATIO = 0.3; // 实际位移 < 期望位移的这个比例，判定为被挡住
+  var COLLISION_SLIDE_SPEED = MOVE_SPEED * 0.9;
+
   var cat = {
     x: 0, y: 0, vx: 0, vy: 0, r: CAT_RADIUS,
-    facing: 0, runCycle: 0, squash: 0
+    facing: 0, runCycle: 0, squash: 0, slideSign: 0
   };
 
   var moveDir = { x: 0, y: 0 };
@@ -390,7 +396,7 @@
     worldSeed = (Math.random() * 2147483647) | 0;
     chunkCache.clear();
     mice.length = 0;
-    cat.x = 0; cat.y = 0; cat.vx = 0; cat.vy = 0; cat.facing = 0; cat.runCycle = 0; cat.squash = 0;
+    cat.x = 0; cat.y = 0; cat.vx = 0; cat.vy = 0; cat.facing = 0; cat.runCycle = 0; cat.squash = 0; cat.slideSign = 0;
     camera.x = 0; camera.y = 0;
     ensureChunksAround(0, 0);
   }
@@ -486,11 +492,61 @@
     var smoothing = 1 - Math.exp(-dt * 14);
     cat.vx += (targetVx - cat.vx) * smoothing;
     cat.vy += (targetVy - cat.vy) * smoothing;
+
+    var startX = cat.x, startY = cat.y;
     cat.x += cat.vx * dt;
     cat.y += cat.vy * dt;
 
     var obstacles = queryNearbyObstacles(cat.x, cat.y);
-    for (var i = 0; i < obstacles.length; i++) resolveCircleAabb(cat, obstacles[i]);
+    var i;
+    for (i = 0; i < obstacles.length; i++) resolveCircleAabb(cat, obstacles[i]);
+
+    // 自动绕行：这一帧实际走的距离比速度本该带它走的距离少太多，说明被
+    // 障碍物正面顶住了（切向分量恰好为 0，普通的圆-AABB 推出没法让它滑
+    // 出去）。给它加一点沿障碍边缘的切向速度，往"绕行距离更短"的那一侧
+    // 推——用猫当前位置相对被撞那块障碍中心、在切向轴上的投影判断哪一侧
+    // 更近。选定方向后记在 cat.slideSign 上，脱离接触前都不重新选边，
+    // 避免来回切换导致的抖动。
+    var intendedDx = cat.vx * dt, intendedDy = cat.vy * dt;
+    var intendedDist = Math.sqrt(intendedDx * intendedDx + intendedDy * intendedDy);
+    var actualDx = cat.x - startX, actualDy = cat.y - startY;
+    var actualDist = Math.sqrt(actualDx * actualDx + actualDy * actualDy);
+    var blocked = (moveDir.x !== 0 || moveDir.y !== 0) &&
+      intendedDist > 0.01 && actualDist < intendedDist * COLLISION_SLIDE_BLOCK_RATIO;
+
+    if (blocked) {
+      var dirLen = Math.sqrt(moveDir.x * moveDir.x + moveDir.y * moveDir.y);
+      var dirX = dirLen > 0 ? moveDir.x / dirLen : 0;
+      var dirY = dirLen > 0 ? moveDir.y / dirLen : 0;
+      var tangentX = -dirY, tangentY = dirX;
+
+      if (cat.slideSign === 0) {
+        // 第一次判定为被挡住：找出真正接触到的那块障碍，用猫相对它中心
+        // 在切向轴上的投影符号决定往哪一侧绕——猫已经偏向哪一侧，就说明
+        // 那一侧剩下的障碍更少，绕行距离更短。
+        var blockingBox = null;
+        for (i = 0; i < obstacles.length; i++) {
+          var ob = obstacles[i];
+          var nx = clamp(cat.x, ob.x, ob.x + ob.w);
+          var ny = clamp(cat.y, ob.y, ob.y + ob.h);
+          var ddx = cat.x - nx, ddy = cat.y - ny;
+          if (ddx * ddx + ddy * ddy < cat.r * cat.r + 1) { blockingBox = ob; break; }
+        }
+        if (blockingBox) {
+          var boxCx = blockingBox.x + blockingBox.w / 2, boxCy = blockingBox.y + blockingBox.h / 2;
+          var lateral = (cat.x - boxCx) * tangentX + (cat.y - boxCy) * tangentY;
+          cat.slideSign = lateral >= 0 ? 1 : -1;
+        } else {
+          cat.slideSign = 1;
+        }
+      }
+
+      cat.x += tangentX * cat.slideSign * COLLISION_SLIDE_SPEED * dt;
+      cat.y += tangentY * cat.slideSign * COLLISION_SLIDE_SPEED * dt;
+      for (i = 0; i < obstacles.length; i++) resolveCircleAabb(cat, obstacles[i]);
+    } else {
+      cat.slideSign = 0;
+    }
 
     var speed = Math.sqrt(cat.vx * cat.vx + cat.vy * cat.vy);
     if (speed > 4) cat.facing = Math.atan2(cat.vy, cat.vx);
@@ -1149,26 +1205,42 @@
   // 轻量前端提示：镜像服务端 start_run() 的白名单（ASCII 字母数字、CJK 统一
   // 表意文字、空格、下划线、短横线），输入时就去掉非法字符、折叠空白、限长，
   // 不等提交才发现昵称被改写。真正的拒绝/敏感词兜底仍以服务端为准。
+  // 最终存储用的严格白名单：ASCII 字母数字、CJK 统一表意文字、空格、下划线、
+  // 短横线——不含 !/@/$，这几个符号要留到 isNicknameOffensive() 检查完才能
+  // 删（见下面 enforceNicknameNotOffensive 的顺序，镜像
+  // supabase/migrations/20261018080000 里 start_run() 的做法）。
   function sanitizeNickname(raw) {
     var cleaned = String(raw || "").replace(/[^a-zA-Z0-9_\- 一-鿿]/g, "");
     cleaned = cleaned.replace(/\s+/g, " ");
     return cleaned.slice(0, 12);
   }
 
-  // 镜像 supabase/migrations/20261018070000_nickname_blacklist_v2.sql 里的
-  // nickname_is_offensive()：同一套规范化步骤（转小写、去分隔符、leet 替换、
-  // 压缩重复字母）+ 同一份词表。两处改一处记得同步另一处。这里只是提前给
-  // 用户一个提示，真正兜底仍由服务端 start_run() 决定存成什么昵称。
-  var NICKNAME_OFFENSIVE_PATTERN = new RegExp(
-    "(傻x|傻逼|白痴|管理员|客服|官方)|" +
-    "(fuk|fuck|fck|shit|sht|bitch|cunt|dick|cock|pussy|asshole|bastard|slut|" +
-    "whore|nigger|nigga|faggot|fag|retard|rape|nazi|hitler|porn|sex|kys|" +
-    "twat|wanker|admin|system|supabase)"
-  );
+  // 打字过程中实时用的白名单，比 sanitizeNickname() 多留了 !/@/$ 三个
+  // leet 触发符号，否则这里先把它们删了，后面 isNicknameOffensive() 的
+  // leet 替换就永远没机会命中（第四轮审核发现的漏网问题，跟服务端是
+  // 同一个坑：白名单清洗不能在敏感词检查*之前*把这些符号删掉）。
+  function sanitizeNicknameLive(raw) {
+    var cleaned = String(raw || "").replace(/[^a-zA-Z0-9_\-!@$ 一-鿿]/g, "");
+    cleaned = cleaned.replace(/\s+/g, " ");
+    return cleaned.slice(0, 12);
+  }
 
-  function normalizeForOffensiveCheck(raw) {
+  // 镜像 supabase/migrations/20261018080000_nickname_leet_and_falsepos_fix.sql
+  // 里的 nickname_is_offensive()：同一套规范化（转小写、leet 替换、压缩
+  // 重复字母）、同一份词表分层（短/易误伤词整词匹配、长词子串匹配、安全词
+  // 白名单）。两处改一处记得同步另一处。这里只是提前给用户一个提示，真正
+  // 兜底仍由服务端 start_run() 决定存成什么昵称。
+  var NICKNAME_WHOLE_WORDS = ["sex", "dick", "fag", "kys", "cock", "rape", "porn", "sht", "fck", "fuk", "cunt"];
+  var NICKNAME_SUBSTRING_PATTERN = /fuck|shit|bitch|pussy|asshole|bastard|slut|whore|nigger|nigga|faggot|retard|nazi|hitler|twat|wanker|admin|system|supabase/;
+  var NICKNAME_SAFE_WORDS = [
+    "scunthorpe", "essex", "sussex", "middlesex", "dickens", "dickson", "cockburn",
+    "hancock", "peacock", "shitake", "shiitake", "grape", "therapist", "assassin",
+    "class", "pass", "bass"
+  ];
+  var NICKNAME_CHINESE_PATTERN = /傻x|傻逼|白痴|管理员|客服|官方/;
+
+  function leetNormalize(raw) {
     var v = String(raw || "").toLowerCase();
-    v = v.replace(/[ _.\-]/g, "");
     var leet = { "0": "o", "1": "i", "3": "e", "4": "a", "5": "s", "7": "t", "@": "a", "$": "s", "!": "i" };
     v = v.replace(/[013457@$!]/g, function (c) { return leet[c] || c; });
     v = v.replace(/(.)\1+/g, "$1");
@@ -1176,25 +1248,60 @@
   }
 
   function isNicknameOffensive(raw) {
-    var v = normalizeForOffensiveCheck(raw);
-    return v !== "" && NICKNAME_OFFENSIVE_PATTERN.test(v);
+    var v = leetNormalize(raw);
+    if (v === "") return false;
+
+    // 整词匹配 1/2：按空格/_/-/. 切分词元（不按数字切分，理由同 SQL 侧：
+    // 数字常常是 leet 替换剩下的尾巴，比如 "bitch99"，按数字切开会把
+    // "b1tch" 拆散，反而破坏 leet 还原）。
+    var toks = v.split(/[ _.\-]+/);
+    var i;
+    for (i = 0; i < toks.length; i++) {
+      if (toks[i] !== "" && NICKNAME_WHOLE_WORDS.indexOf(toks[i]) !== -1) return true;
+    }
+
+    // 整词匹配 2/2：分隔符整个删掉再整体比较，堵住 "s-e-x" 这种按词元切分
+    // 会被拆散的写法。
+    var glued = v.replace(/[ _.\-]/g, "");
+    if (NICKNAME_WHOLE_WORDS.indexOf(glued) !== -1) return true;
+
+    // 子串匹配：先挖掉安全词，再检查长词表。
+    var collapsed = v.replace(/[ _.\-]+/g, " ").trim();
+    var scrubbed = collapsed;
+    for (i = 0; i < NICKNAME_SAFE_WORDS.length; i++) {
+      scrubbed = scrubbed.split(NICKNAME_SAFE_WORDS[i]).join("");
+    }
+    if (NICKNAME_SUBSTRING_PATTERN.test(scrubbed)) return true;
+
+    if (NICKNAME_CHINESE_PATTERN.test(collapsed)) return true;
+
+    return false;
   }
 
-  // 在输入框失焦（blur）或真正提交（beginRun/切换昵称）时调用：命中就把
-  // 输入框清空、显示提示文字，并返回空字符串交给调用方——提交给
-  // start_run() 时空昵称会被服务端回退成"匿名猫+随机数字"，前后端不需要
-  // 各自维护一套随机数生成逻辑也能保持结果一致。不在每次按键时都做这个
-  // 检查，否则打到一半的词（比如正在打"Essex"打到"sex"那一刻）就会被
-  // 整个清空，体验很差。
+  // 在输入框失焦（blur）或真正提交（beginRun/切换昵称）时调用。顺序镜像
+  // 服务端 start_run()：先查*原始*输入（这时候 !/@/$ 还在，leet 替换才有
+  // 意义），没命中才做严格白名单清洗，清洗完再查一次（清洗可能把原本被
+  // 符号隔开的词粘到一起）。命中就把输入框清空、显示提示文字，返回空
+  // 字符串交给调用方——提交给 start_run() 时空昵称会被服务端回退成
+  // "匿名猫+随机数字"，前后端不需要各自维护一套随机数生成逻辑也能保持
+  // 结果一致。不在每次按键时都做这个检查，否则打到一半的词（比如正在打
+  // "Essex" 打到 "sex" 那一刻）就会被整个清空，体验很差。
   function enforceNicknameNotOffensive(inputEl, hintEl) {
-    var value = inputEl.value;
-    if (isNicknameOffensive(value)) {
+    var raw = inputEl.value;
+    if (isNicknameOffensive(raw)) {
       inputEl.value = "";
       hintEl.classList.remove("hidden");
       return "";
     }
+    var cleaned = sanitizeNickname(raw);
+    if (isNicknameOffensive(cleaned)) {
+      inputEl.value = "";
+      hintEl.classList.remove("hidden");
+      return "";
+    }
+    inputEl.value = cleaned;
     hintEl.classList.add("hidden");
-    return value;
+    return cleaned;
   }
 
   function loadTopScores() {
@@ -1365,13 +1472,13 @@
   dom.restartBtn.addEventListener("click", function () { hideScreen(dom.resultScreen); beginRun(); });
   dom.homeBtn.addEventListener("click", function () { hideScreen(dom.resultScreen); enterStart(); });
   dom.nicknameInput.addEventListener("input", function () {
-    dom.nicknameInput.value = sanitizeNickname(dom.nicknameInput.value);
+    dom.nicknameInput.value = sanitizeNicknameLive(dom.nicknameInput.value);
   });
   dom.nicknameInput.addEventListener("blur", function () {
     enforceNicknameNotOffensive(dom.nicknameInput, dom.nicknameHint);
   });
   dom.nicknameInputResult.addEventListener("input", function () {
-    dom.nicknameInputResult.value = sanitizeNickname(dom.nicknameInputResult.value);
+    dom.nicknameInputResult.value = sanitizeNicknameLive(dom.nicknameInputResult.value);
   });
   dom.nicknameInputResult.addEventListener("blur", function () {
     enforceNicknameNotOffensive(dom.nicknameInputResult, dom.nicknameHintResult);
