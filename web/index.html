@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, minimum-scale=1, user-scalable=no, viewport-fit=cover">
-<meta name="theme-color" content="#8fcf6b">
+<meta name="theme-color" content="#a8de8e">
 <title>小猫抓老鼠 Cat Mouse Chase</title>
 <link rel="icon" href="data:,">
 <link rel="stylesheet" href="style.css">
@@ -14,9 +14,9 @@
 
   <div id="hud" class="hidden">
     <div id="hudLeft">
-      <div id="scoreText">0</div>
+      <div id="scoreText" class="hud-pill">0</div>
       <div id="comboText" class="hidden"></div>
-      <div id="rankText">排名：--</div>
+      <div id="rankText" class="hud-pill small">排名：--</div>
     </div>
     <div id="hudRight">
       <button id="pauseBtn" class="icon-btn" aria-label="暂停">⏸</button>
@@ -25,22 +25,23 @@
   </div>
 
   <div id="startScreen" class="overlay">
-    <div class="panel">
-      <h1>🐱 小猫抓老鼠</h1>
-      <p class="subtitle">CAT MOUSE CHASE</p>
-      <div class="cat-preview">🐱🐭</div>
-      <p class="hint">
-        点击/按住屏幕任意方向移动小猫，靠近老鼠自动抓住它！<br>
-        不限时，想玩多久玩多久，随时可以结束本局去排行榜上争名次。<br>
-        桌面端可用方向键 / WASD 移动。
-      </p>
-      <p class="best">历史最高分：<span id="bestScoreStart">0</span></p>
-      <label class="nickname-label" for="nicknameInput">昵称
+    <div class="panel start-panel">
+      <h1>小猫抓老鼠</h1>
+      <canvas id="skinPreview" class="skin-preview" width="160" height="150" aria-hidden="true"></canvas>
+      <div class="skin-name" id="skinName">橘子</div>
+      <div class="skin-desc" id="skinDesc">活力满满的橘猫</div>
+      <div class="section-title">选择你的小猫</div>
+      <div class="skin-grid" id="skinGrid" role="radiogroup" aria-label="选择小猫"></div>
+      <label class="nickname-label" for="nicknameInput">昵称</label>
+      <div class="nickname-row">
         <input id="nicknameInput" type="text" maxlength="12" placeholder="给自己起个昵称吧" autocomplete="off">
-      </label>
+        <button id="diceBtn" class="dice-btn" type="button" aria-label="随机昵称"><span class="dice-face"><i></i><i></i><i></i><i></i><i></i></span></button>
+      </div>
       <p class="nickname-hint hidden" id="nicknameHint">昵称包含不当词语，将使用默认昵称</p>
-      <button id="startBtn" class="btn-primary">开始游戏</button>
+      <button id="startBtn" class="btn-primary btn-wide">开始抓老鼠 🐾</button>
       <button id="showLeaderboardBtnStart" class="btn-secondary">查看排行榜</button>
+      <p class="best">历史最高分：<span id="bestScoreStart">0</span></p>
+      <p class="hint">点击/按住屏幕任意方向移动，靠近老鼠就能抓住！不限时，随时可结束本局。桌面端可用方向键 / WASD。</p>
     </div>
   </div>
 
@@ -92,6 +93,7 @@
     </div>
   </div>
 </div>
+<script src="art.js"></script>
 <script src="game.js"></script>
 </body>
 </html>

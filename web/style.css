@@ -354,3 +354,48 @@ html, body {
   text-align: center;
   padding: 16px 0;
 }
+
+/* ===== Q版重设计 ===== */
+html, body { background: #a8de8e; }
+.overlay { background: linear-gradient(180deg, rgba(255, 236, 214, 0.55), rgba(168, 222, 142, 0.55)); }
+.panel { background: rgba(255, 255, 255, 0.96); border: 4px solid #ffc58f; box-shadow: 0 14px 34px rgba(224, 122, 51, 0.22); }
+.panel h1 { font-size: 30px; color: #ff8a3d; text-shadow: 0 2px 0 #fff, 0 3px 0 #ffd9b8; letter-spacing: 1px; }
+.panel h2 { color: #ff8a3d; }
+.start-panel { padding: 18px 18px 16px; }
+.skin-preview { width: 128px; height: 120px; display: block; margin: 2px auto 0; }
+.skin-name { font-size: 19px; font-weight: 800; color: #7a4a2a; }
+.skin-desc { font-size: 12px; color: #b08a6a; margin-bottom: 8px; }
+.section-title { text-align: left; font-size: 14px; font-weight: 800; color: #7a4a2a; margin: 4px 2px 6px; }
+.skin-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.skin-card { position: relative; border: 2px solid #ece6df; background: #f7f5f2; border-radius: 16px; padding: 4px 0 4px; cursor: pointer; font: inherit; color: #7a4a2a; font-size: 13px; font-weight: 700; }
+.skin-card canvas { width: 56px; height: 52px; display: block; margin: 0 auto; }
+.skin-card.selected { border: 3px solid #ff9d4d; background: #fff1e2; }
+.skin-card.selected::after { content: "✓"; position: absolute; top: -7px; right: -7px; width: 20px; height: 20px; line-height: 18px; border-radius: 50%; background: #ff9d4d; color: #fff; font-size: 12px; border: 2px solid #fff; }
+.skin-card:active { transform: scale(0.95); }
+.nickname-label { color: #7a4a2a; font-size: 14px; font-weight: 800; margin: 10px 2px 6px; }
+.nickname-row { display: flex; gap: 8px; align-items: center; }
+.nickname-row input, .nickname-label input { flex: 1; min-width: 0; padding: 11px 16px; font-size: 16px; border-radius: 999px; border: 3px solid #ffc58f; background: #fff; color: #5a3a30; }
+.nickname-row input:focus { outline: none; border-color: #ff9d4d; }
+.dice-btn { flex-shrink: 0; width: 46px; height: 46px; border-radius: 14px; border: 3px solid #e07a33; background: #ff9d4d; display: flex; align-items: center; justify-content: center; cursor: pointer; box-shadow: 0 3px 0 #e07a33; padding: 0; }
+.dice-btn:active { transform: translateY(2px); box-shadow: 0 1px 0 #e07a33; }
+.dice-btn.rolling .dice-face { animation: dice-roll 0.45s ease-out; }
+@keyframes dice-roll { 0% { transform: rotate(0) scale(1); } 50% { transform: rotate(200deg) scale(0.8); } 100% { transform: rotate(360deg) scale(1); } }
+.dice-face { position: relative; width: 26px; height: 26px; background: #fff; border-radius: 7px; display: block; }
+.dice-face i { position: absolute; width: 5px; height: 5px; border-radius: 50%; background: #ff7a3d; }
+.dice-face i:nth-child(1) { left: 4px; top: 4px; } .dice-face i:nth-child(2) { right: 4px; top: 4px; }
+.dice-face i:nth-child(3) { left: 10.5px; top: 10.5px; }
+.dice-face i:nth-child(4) { left: 4px; bottom: 4px; } .dice-face i:nth-child(5) { right: 4px; bottom: 4px; }
+.btn-wide { display: block; width: 100%; margin: 12px 0 6px; font-size: 19px; }
+.start-panel .hint { font-size: 12px; margin: 6px 0 0; }
+.start-panel .best { margin-top: 6px; }
+.hud-pill { background: rgba(255, 255, 255, 0.9); border: 3px solid #ffb36b; border-radius: 999px; color: #7a4a2a !important; text-shadow: none !important; padding: 2px 16px; display: inline-block; align-self: flex-start; }
+#scoreText.hud-pill { font-size: 22px; }
+#scoreText.hud-pill::before { content: "🐭 "; font-size: 16px; }
+#rankText.hud-pill { font-size: 13px; font-weight: 800; padding: 2px 12px; opacity: 1; margin-top: 4px; }
+#comboText { color: #ff7a9a; text-shadow: 0 0 3px #fff, 0 0 3px #fff; font-weight: 900; padding-left: 8px; }
+.icon-btn { background: #ff9d4d; border: 3px solid #fff; color: #fff; box-shadow: 0 3px 8px rgba(224, 122, 51, 0.35); }
+.lb-avatar { width: 30px; height: 30px; flex-shrink: 0; margin-right: 2px; }
+.lb-row { border-bottom: 1px dashed #f3d9bf; }
+.lb-score { color: #ff8a3d; }
+#leaderboardScreen { background: rgba(255, 244, 232, 0.94); }
+.lb-badge { margin-right: 8px; }
