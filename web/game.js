@@ -1470,7 +1470,7 @@
       dom.leaderboardList.innerHTML = '<div class="lb-error">排行榜未配置</div>';
       return;
     }
-    restGet("/rest/v1/leaderboard_live?select=nickname,display_score,is_live,is_paused,skin&order=display_score.desc&limit=" + LEADERBOARD_TOPN_LIMIT)
+    restGet("/rest/v1/leaderboard_live?select=nickname,display_score,is_live,is_paused,skin,rank&order=rank.asc&limit=" + LEADERBOARD_TOPN_LIMIT)
       .then(function (res) {
         if (!res.ok) { dom.leaderboardList.innerHTML = '<div class="lb-error">暂时无法连接排行榜</div>'; return; }
         if (res.rows.length === 0) { dom.leaderboardList.innerHTML = '<div class="lb-empty">还没有人上榜，来当第一个吧！</div>'; return; }
@@ -1481,7 +1481,7 @@
           if (row.is_live) badge = '<span class="lb-badge live">游戏中</span>';
           else if (row.is_paused) badge = '<span class="lb-badge paused">已暂停</span>';
           var skinId = SKIN_IDS.indexOf(row.skin) >= 0 ? row.skin : "orange";
-          html += '<div class="lb-row"><span class="lb-rank">' + (i + 1) + '</span>' +
+          html += '<div class="lb-row"><span class="lb-rank">' + (row.rank != null ? row.rank : i + 1) + '</span>' +
             '<img class="lb-avatar" alt="" src="' + window.CatArt.avatarDataUrl(skinId) + '">' +
             '<span class="lb-name">' + escapeHtml(row.nickname || "匿名猫") + '</span>' +
             badge + '<span class="lb-score">' + row.display_score + '</span></div>';
