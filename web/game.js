@@ -407,6 +407,7 @@
     if (state !== STATE_PLAY) return;
     if (activePointerId !== null) return;
     activePointerId = e.pointerId;
+    uniCancel();
     var dir = computeDirFromPoint(e.clientX, e.clientY);
     if (dir) { moveDir.x = dir.x; moveDir.y = dir.y; }
   }
@@ -431,6 +432,7 @@
   window.addEventListener("pointerleave", onPointerUp);
 
   window.addEventListener("keydown", function (e) {
+    if (!keysDown[e.key]) uniCancel();
     keysDown[e.key] = true;
     syncKeyDir();
   });
@@ -445,8 +447,9 @@
 
   function updateCat(dt) {
     cat.r = CAT_RADIUS * entityScaleMult;
-    var targetVx = moveDir.x * MOVE_SPEED;
-    var targetVy = moveDir.y * MOVE_SPEED;
+    var spdMul = uniSpeedMul();
+    var targetVx = moveDir.x * MOVE_SPEED * spdMul;
+    var targetVy = moveDir.y * MOVE_SPEED * spdMul;
     var smoothing = 1 - Math.exp(-dt * 14);
     cat.vx += (targetVx - cat.vx) * smoothing;
     cat.vy += (targetVy - cat.vy) * smoothing;
@@ -506,6 +509,7 @@
       cat.slideSign = 0;
     }
 
+    uniLungeStep(dt);
     var speed = Math.sqrt(cat.vx * cat.vx + cat.vy * cat.vy);
     if (speed > 4) cat.facing = Math.atan2(cat.vy, cat.vx);
     cat.runCycle += dt * (speed / 24 + 0.3);
@@ -550,7 +554,7 @@
   }
 
   function resetScoring() {
-    score = 0; catches = 0; catchesGrey = 0; catchesBrown = 0; catchesGold = 0;
+    uniReset(); score = 0; catches = 0; catchesGrey = 0; catchesBrown = 0; catchesGold = 0;
     combo = 0; comboTimer = 0; comboMax = 0; elapsedPlayTime = 0;
   }
 
@@ -861,6 +865,7 @@
 
   function finishStep(m, dt) {
     applyAbilityToMouse(m, dt);
+    if (m.cornerT > 0) { m.cornerT -= dt; m.vx *= 0.4; m.vy *= 0.4; }
     m.x += m.vx * dt; m.y += m.vy * dt;
     var obstacles = queryNearbyObstacles(m.x, m.y);
     for (var k = 0; k < obstacles.length; k++) resolveCircleAabb(m, obstacles[k]);
@@ -877,6 +882,7 @@
     var gained = Math.round(baseScoreFor(m) * mult);
     score += gained;
     catches += 1;
+    uniOnCapture(m);
     if (m.type === "grey") catchesGrey++;
     else if (m.type === "brown") catchesBrown++;
     else catchesGold++;
@@ -2042,7 +2048,10 @@
   }
 
   function drawCat() {
-    drawCatAt(worldToScreenX(cat.x), worldToScreenY(cat.y) + s(evoHop()), s(cat.r), catAnim, cat.runCycle, currentSkin);
+    var sx = worldToScreenX(cat.x), sy = worldToScreenY(cat.y) + s(evoHop()), stc = uniCatStretch();
+    if (stc) { ctx.save(); ctx.translate(sx, sy); ctx.rotate(stc.a); ctx.scale(stc.s, 1 / Math.sqrt(stc.s)); ctx.rotate(-stc.a); ctx.translate(-sx, -sy); }
+    drawCatAt(sx, sy, s(cat.r), catAnim, cat.runCycle, currentSkin);
+    if (stc) ctx.restore();
   }
 
   // ---- v9 绘制：LOD（最近 60 只完整动画，其余跑步 2 帧、无尘土）+ 每种行为的外观提示 ----
@@ -2120,7 +2129,7 @@
       if (!v.full && st[0] === "run") st = ["run", st[1] & 2]; // 远处只用 2 帧
       if (!v.full && st[0] === "sit") st = ["sit", 2];
       var ox = 0;
-      if (m.trem > 0 || (m.beh === "timid" && m.state === "flee" && v.full)) ox = Math.sin(elapsedPlayTime * 60) * 2 * u;
+      if (m.cornerT > 0 || m.trem > 0 || (m.beh === "timid" && m.state === "flee" && v.full)) ox = Math.sin(elapsedPlayTime * 60) * 2 * u;
       if (m.asleep) st = ["sit", 2];
       if (!dbgDraw.noSprite) blit(ANIM.mouseSprite(m.type, d[0], st[0], st[1], spritePx(u)), sx + ox, sy, u, d[1]);
       if (!dbgDraw.noTell && (v.full || m.type === "gold" || m.packId)) drawTell(m, sx + ox, sy, u, st, v.full, v.i);
@@ -2142,6 +2151,7 @@
     if (m.beh === "thief") emojiQuick("🧀", sx + Math.cos(m.facing) * 14 * u, sy + 4 * u, 26 * u);
     if (m.beh === "forager" && m.eating && full) emojiQuick("😋", sx, top, 26 * u);
     if (m.beh === "teaser" && m.taunt) { emojiQuick("😛", sx + 16 * u, top - 4 * u, 29 * u); if (full) emojiQuick("略略略", sx, top - 18 * u, 14 * u, null, "#fff"); }
+    if (m.cornerT > 0) emojiQuick("💦", sx - 14 * u, top + 2 * u, 22 * u);
     if (m.beh === "teaser" && m.tiredT > 0) emojiQuick("💦", sx + 14 * u, top, 22 * u);
     if (m.asleep) emojiQuick("💤", sx + 14 * u + Math.sin(elapsedPlayTime * 2 + i) * 3 * u, top - 4 * u - ((elapsedPlayTime + m.seed) % 1.5) * 6 * u, 26 * u);
     if (m.excl > 0) emojiQuick("!", sx, top - 10 * u, 24 * u, null, "#ff4d4d");
@@ -2822,8 +2832,24 @@
       b.addEventListener("click", function () { abPanelTab = k.id; renderAbilityPanel(); });
       dom.abTabs.appendChild(b);
     });
-    var sk = skillOf(tab), cur = tab === mine ? stageFor(n) : 0;
+    var ub = document.createElement("button"); ub.className = "ab-tab" + (tab === "uni" ? " on" : ""); ub.textContent = "通用 🐾"; ub.setAttribute("role", "tab");
+    ub.addEventListener("click", function () { abPanelTab = "uni"; renderAbilityPanel(); }); dom.abTabs.appendChild(ub);
     dom.abStages.innerHTML = "";
+    if (tab === "uni") {
+      var cu = stageFor(n), ut = document.createElement("div"); ut.className = "d"; ut.style.textAlign = "center";
+      ut.textContent = "所有猫共享 · 本局已抓 " + n + " 只 · 通用 Lv" + cu + "（15/40/80/150 升级）"; dom.abStages.appendChild(ut);
+      UNI_INFO.forEach(function (u) {
+        var row = document.createElement("div"); row.className = "ab-st cur";
+        row.innerHTML = '<span class="ic"></span><div class="tx"><b></b><span class="tag"></span><div class="d"></div><div class="d nx"></div></div>';
+        row.querySelector(".ic").textContent = u.icon; row.querySelector("b").textContent = u.name + " Lv" + cu;
+        row.querySelector(".tag").textContent = "⭐ 当前"; row.querySelector(".d").textContent = (cu > 1 ? u.lv[0] + " → " : "") + u.lv[cu - 1];
+        row.querySelector(".nx").textContent = cu < 5 ? "🔒 Lv" + (cu + 1) + "（抓 " + STAGE_AT[cu] + " 只）：" + u.lv[cu] : "MAX";
+        if (cu === 1) row.querySelector(".d").textContent = u.lv[0];
+        dom.abStages.appendChild(row);
+      });
+      return;
+    }
+    var sk = skillOf(tab), cur = tab === mine ? stageFor(n) : 0;
     var title = document.createElement("div"); title.className = "d"; title.style.textAlign = "center";
     title.textContent = sk.icon + " " + sk.name + (tab === mine ? " · 本局已抓 " + n + " 只" : " · 抓到 0/15/40/80/150 只进化");
     dom.abStages.appendChild(title);
@@ -2925,11 +2951,152 @@
     }
   }
 
+  // =======================================================================
+  // 通用被动（所有猫）：#1 飞扑 · #2 连环扑 · #6 顺势冲刺 · #8 墙角逼宫
+  // 只在玩家当前移动方向的扇形内动作；任何新点击立即取消；不让猫掉头。等级 = 本局抓捕数（15/40/80/150）
+  // =======================================================================
+  var UNI_INFO = [
+    { id: "pounce", icon: "🐾", name: "飞扑", lv: ["身前 ±60° · 60px 内有鼠自动扑（冷却 1.2s）", "范围 70px", "冷却 0.9s", "扑中后立刻可再扑", "落地小冲击波，晕住周围老鼠（不计分）"] },
+    { id: "chain", icon: "💫", name: "连环扑", lv: ["扑中后 0.4s 内 80px 还有鼠（移动方向 ±90°）再扑，最多 2 连", "最多 2 连", "最多 3 连", "最多 4 连", "最多 5 连"] },
+    { id: "dash", icon: "💨", name: "顺势冲刺", lv: ["同方向直走 ≥1s 且前方 150px 有鼠：速度 ×1.3，1.0s", "×1.35，1.2s", "×1.4，1.5s", "×1.45，1.8s", "×1.5，2.2s"] },
+    { id: "corner", icon: "😰", name: "墙角逼宫", lv: ["老鼠背靠障碍且猫在 100px 内：发抖冒汗，速度 -60%", "同上", "两侧 50px 内的老鼠也被吓住", "同上", "同上"] }
+  ];
+  var uni = null;
+  function uniReset() {
+    uni = { cd: 0, lunge: null, chainLeft: 0, chainN: 0, chainWin: 0, straightT: 0, lastDx: 0, lastDy: 0, dashT: 0, dashMul: 1,
+      ghosts: [], pops: [], waves: [], stats: { pounce: 0, chain: 0, dash: 0, corner: 0, maxChain: 0 } };
+  }
+  uniReset();
+  function uniStage() { return stageFor(catches); }
+  function uniOk(m) { return !m.hidden && !m.under && !m.carried; }
+  // 找扇形内最近的鼠：dir=移动方向，half=半角
+  function uniFind(R, half) {
+    var best = null, bd = 1e9, cosH = Math.cos(half);
+    gridEach(cat.x, cat.y, R + 20, function (m) {
+      if (!uniOk(m)) return;
+      var dx = m.x - cat.x, dy = m.y - cat.y, d = Math.sqrt(dx * dx + dy * dy);
+      if (d > R || d < 1) return;
+      if ((dx * moveDir.x + dy * moveDir.y) / d < cosH) return;
+      if (d < bd) { bd = d; best = m; }
+    });
+    return best;
+  }
+  function uniCancel() {
+    if (!uni) return;
+    if (uni.lunge || uni.dashT > 0) { if (CA.sfx.uni) CA.sfx.uni("cancel"); }
+    uni.lunge = null; uni.chainLeft = 0; uni.chainWin = 0; uni.dashT = 0; uni.dashMul = 1; uni.straightT = 0;
+  }
+  function uniStartLunge(m, chain) {
+    var esm = entityScaleMult, dx = m.x - cat.x, dy = m.y - cat.y, d = Math.sqrt(dx * dx + dy * dy) || 1;
+    var len = Math.min(80 * esm, d + 4), ux = dx / d, uy = dy / d;
+    uni.lunge = { sx: cat.x, sy: cat.y, ux: ux, uy: uy, len: len, t: 0, dur: 0.25, hit: false, chain: chain, done: 0 };
+    if (chain) { uni.chainN++; uni.stats.chain++; if (uni.chainN + 1 > uni.stats.maxChain) uni.stats.maxChain = uni.chainN + 1; }
+    else { uni.chainN = 0; uni.stats.pounce++; }
+    if (CA.sfx.uni) CA.sfx.uni(chain ? "chain" : "pounce", uni.chainN);
+  }
+  function uniSpeedMul() { return uni && uni.dashT > 0 ? uni.dashMul : 1; }
+  // 在 updateCat 末尾调用：飞扑位移（沿玩家方向扇形内，带障碍碰撞）
+  function uniLungeStep(dt) {
+    var L = uni.lunge; if (!L) return;
+    var prev = L.done; L.t += dt; var k = Math.min(1, L.t / L.dur), e = 1 - (1 - k) * (1 - k);
+    var step = L.len * e - prev; L.done = L.len * e;
+    cat.x += L.ux * step; cat.y += L.uy * step;
+    var obs = queryNearbyObstacles(cat.x, cat.y); for (var i = 0; i < obs.length; i++) resolveCircleAabb(cat, obs[i]);
+    if (L.chain && Math.random() < 0.6) uni.ghosts.push({ x: cat.x, y: cat.y, a: 0.45 });
+  }
+  function uniOnCapture(m) {
+    if (uni && uni.lunge && !uni.lunge.hit) { uni.lunge.hit = true; if (uni.lunge.chain) uni.pops.push({ x: m.x, y: m.y - 20, txt: "×" + (uni.chainN + 1), age: 0 }); }
+  }
+  function uniUpdate(dt) {
+    var st = uniStage(), esm = entityScaleMult, moving = moveDir.x !== 0 || moveDir.y !== 0, i;
+    uni.cd = Math.max(0, uni.cd - dt);
+    // 顺势冲刺：方向保持不变的时间
+    if (moving && uni.lastDx * moveDir.x + uni.lastDy * moveDir.y > 0.995) uni.straightT += dt;
+    else { if (uni.dashT > 0) uniCancel(); uni.straightT = 0; }
+    uni.lastDx = moveDir.x; uni.lastDy = moveDir.y;
+    if (!moving) { uni.lunge = null; uni.chainLeft = 0; uni.chainWin = 0; }
+    if (uni.dashT > 0) { uni.dashT -= dt; if (uni.dashT <= 0) uni.dashMul = 1; if (Math.random() < 0.5) uni.ghosts.push({ x: cat.x, y: cat.y, a: 0.2, line: true, ang: Math.atan2(moveDir.y, moveDir.x), off: (Math.random() - 0.5) * 30 }); }
+    else if (moving && uni.straightT >= 1 && uniFind(150 * esm, Math.PI / 6)) {
+      uni.dashMul = [1.3, 1.35, 1.4, 1.45, 1.5][st - 1]; uni.dashT = [1.0, 1.2, 1.5, 1.8, 2.2][st - 1]; uni.stats.dash++;
+      if (CA.sfx.uni) CA.sfx.uni("dash");
+    }
+    // 飞扑 / 连环扑
+    var L = uni.lunge;
+    if (L && L.t >= L.dur) {
+      uni.lunge = null; cat.squash = 1; for (i = 0; i < 4; i++) spawnDust(cat.x, cat.y, Math.atan2(L.uy, L.ux) + (i - 1.5) * 0.9, 10 * esm);
+      if (CA.sfx.uni) CA.sfx.uni("land");
+      if (L.hit) {
+        if (st >= 5) { // 小冲击波：晕眩不计分
+          uni.waves.push({ x: cat.x, y: cat.y, age: 0 });
+          gridEach(cat.x, cat.y, 70 * esm, function (m) { if (uniOk(m) && distance(m.x, m.y, cat.x, cat.y) < 60 * esm) stunM(m, 0.8, "wave"); });
+          if (CA.sfx.uni) CA.sfx.uni("wave");
+        }
+        if (st >= 4) uni.cd = 0;
+        if (!L.chain) uni.chainLeft = Math.min(5, st + 1) - 1;
+        if (uni.chainLeft > 0) uni.chainWin = 0.4;
+      } else { uni.chainLeft = 0; uni.chainWin = 0; }
+    }
+    if (!uni.lunge && moving) {
+      if (uni.chainWin > 0) {
+        uni.chainWin -= dt;
+        var cm = uniFind(80 * esm, Math.PI / 2);
+        if (cm) { uni.chainLeft--; uniStartLunge(cm, true); }
+        else if (uni.chainWin <= 0) uni.chainLeft = 0;
+      } else if (uni.cd <= 0) {
+        var pm = uniFind((st >= 2 ? 70 : 60) * esm, Math.PI / 3);
+        if (pm) { uniStartLunge(pm, false); uni.cd = st >= 3 ? 0.9 : 1.2; }
+      }
+    }
+    // 墙角逼宫
+    var near = [];
+    gridEach(cat.x, cat.y, 110 * esm, function (m) {
+      if (!uniOk(m) || m.stun > 0) return;
+      var dx = m.x - cat.x, dy = m.y - cat.y, d = Math.sqrt(dx * dx + dy * dy);
+      if (d > 100 * esm || d < 1) return;
+      var px = m.x + dx / d * (m.r + 10 * esm), py = m.y + dy / d * (m.r + 10 * esm), obs = queryNearbyObstacles(px, py);
+      for (var j = 0; j < obs.length; j++) { var o = obs[j]; if (px >= o.x && px <= o.x + o.w && py >= o.y && py <= o.y + o.h) { near.push(m); break; } }
+    });
+    for (i = 0; i < near.length; i++) {
+      var m0 = near[i]; if (!(m0.cornerT > 0)) { uni.stats.corner++; if (CA.sfx.uni) CA.sfx.uni("corner"); } m0.cornerT = 0.3;
+      if (st >= 3) gridEach(m0.x, m0.y, 50 * esm, function (m) { if (m !== m0 && uniOk(m) && distance(m.x, m.y, m0.x, m0.y) < 50 * esm) m.cornerT = Math.max(m.cornerT || 0, 0.3); });
+    }
+    for (i = uni.ghosts.length - 1; i >= 0; i--) { uni.ghosts[i].a -= dt * 1.6; if (uni.ghosts[i].a <= 0) uni.ghosts.splice(i, 1); }
+    if (uni.ghosts.length > 40) uni.ghosts.splice(0, uni.ghosts.length - 40);
+    for (i = uni.pops.length - 1; i >= 0; i--) { uni.pops[i].age += dt; if (uni.pops[i].age > 0.8) uni.pops.splice(i, 1); }
+    for (i = uni.waves.length - 1; i >= 0; i--) { uni.waves[i].age += dt; if (uni.waves[i].age > 0.35) uni.waves.splice(i, 1); }
+  }
+  function uniDrawUnder() {
+    for (var i = 0; i < uni.ghosts.length; i++) {
+      var g = uni.ghosts[i], sx = worldToScreenX(g.x), sy = worldToScreenY(g.y);
+      if (g.line) { // 速度线
+        var px = -Math.sin(g.ang), py = Math.cos(g.ang); ctx.strokeStyle = "rgba(255,255,255," + g.a * 3 + ")"; ctx.lineWidth = s(2);
+        ctx.beginPath(); ctx.moveTo(sx + px * s(g.off) - Math.cos(g.ang) * s(10), sy + s(14) + py * s(g.off) - Math.sin(g.ang) * s(10));
+        ctx.lineTo(sx + px * s(g.off) - Math.cos(g.ang) * s(40), sy + s(14) + py * s(g.off) - Math.sin(g.ang) * s(40)); ctx.stroke();
+      } else { ctx.globalAlpha = g.a; drawCatAt(sx, sy, s(cat.r), catAnim, cat.runCycle, currentSkin, true); ctx.globalAlpha = 1; }
+    }
+    for (i = 0; i < uni.waves.length; i++) {
+      var w = uni.waves[i], k = w.age / 0.35; ctx.strokeStyle = "rgba(255,240,200," + (1 - k) + ")"; ctx.lineWidth = s(4);
+      ctx.beginPath(); ctx.arc(worldToScreenX(w.x), worldToScreenY(w.y) + s(10), s(60 * entityScaleMult) * k, 0, 7); ctx.stroke();
+    }
+  }
+  function uniDrawOver() {
+    for (var i = 0; i < uni.pops.length; i++) {
+      var p = uni.pops[i], k = p.age / 0.8; emojiQuick(p.txt, worldToScreenX(p.x), worldToScreenY(p.y) - s(30 * k), s(22) * (1 + 0.4 * Math.max(0, 1 - k * 4)), 1 - k * k, "#ffd23f");
+    }
+  }
+  // 猫身拉伸：飞扑时沿扑击方向拉长、冲刺时略拉长
+  function uniCatStretch() {
+    if (uni.lunge) { var k = uni.lunge.t / uni.lunge.dur; return { a: Math.atan2(uni.lunge.uy, uni.lunge.ux), s: 1 + 0.35 * Math.sin(Math.PI * Math.min(1, k)) }; }
+    if (uni.dashT > 0) return { a: Math.atan2(moveDir.y, moveDir.x), s: 1.12 };
+    return null;
+  }
+
   function update(dt) {
     updateMusic();
     if (state === STATE_PLAY) {
       elapsedPlayTime += dt;
       updateCat(dt);
+      uniUpdate(dt);
       updateAbilities(dt);
       updateCamera(dt);
       ensureChunksAround(camera.x, camera.y);
@@ -2961,11 +3128,13 @@
     drawObstacles();
     drawAbilityGround();
     drawDust();
+    uniDrawUnder();
     drawMice();
     drawAbilityBehindCat();
     drawCat();
     drawAbilityOverlay();
     drawEffects();
+    uniDrawOver();
   }
 
 
@@ -3142,6 +3311,7 @@
     get abilityPanelOpen() { return !dom.abilityScreen.classList.contains("hidden"); },
     get score() { return score; },
     get catches() { return catches; },
+    get uni() { return { cd: uni.cd, lunge: !!uni.lunge, chainN: uni.chainN, dashT: uni.dashT, dashMul: uni.dashMul, straightT: uni.straightT, stats: uni.stats, corner: mice.filter(function (m) { return m.cornerT > 0; }).length }; },
     get audio() { return window.CatAudio ? window.CatAudio.debug() : null; },
     get combo() { return combo; },
     get chunkCount() { return chunkCache.size; },

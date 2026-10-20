@@ -163,6 +163,18 @@
       else if (skin === "black") { tone(B, t, 1200, 0.05, "square", 0.05); }
       else tone(B, t, 1000, 0.06, "triangle", 0.06, 700);
     },
+    // 通用被动音效
+    uni: function (kind, n) {
+      if (!canPlay("uni_" + kind, kind === "corner" ? 1 : 2, kind === "corner" ? 0.25 : 0.06)) return;
+      var t = now(), B = sfxBus;
+      if (kind === "pounce") { noise(B, t, 0.12, 0.06, 2500, "bandpass"); tone(B, t, 300, 0.14, "triangle", 0.08, 700); }
+      else if (kind === "chain") { var f = 600 * Math.pow(2, Math.min(n || 1, 5) * 2 / 12); tone(B, t, f, 0.1, "square", 0.05, f * 1.5); noise(B, t, 0.08, 0.04, 4000); }
+      else if (kind === "land") { tone(B, t, 160, 0.1, "sine", 0.1, 80); noise(B, t, 0.12, 0.04, 800, "lowpass"); }
+      else if (kind === "wave") { tone(B, t, 220, 0.3, "sine", 0.1, 60); noise(B, t, 0.25, 0.05, 1200, "lowpass"); }
+      else if (kind === "dash") { noise(B, t, 0.35, 0.05, 3000, "bandpass"); tone(B, t, 500, 0.3, "sawtooth", 0.03, 1400, 0.05); }
+      else if (kind === "corner") { tone(B, t, 1800, 0.06, "sine", 0.03, 1400); tone(B, t + 0.07, 1700, 0.06, "sine", 0.025, 1300); }
+      else if (kind === "cancel") { tone(B, t, 500, 0.08, "sine", 0.03, 300); }
+    },
     squeak: function () {
       if (!ctx) return; var t = now(); while (squeakTimes.length && t - squeakTimes[0] > 1) squeakTimes.shift();
       if (squeakTimes.length >= 6 || !canPlay("squeak", 1, 0.08)) return; squeakTimes.push(t);
