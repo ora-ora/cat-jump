@@ -973,10 +973,10 @@
   function resetAbilities() {
     ab = {
       skin: currentSkin, stage: 1, procs: 0, flash: 0, evoT: 0, hist: [], fx: [],
-      t: {}, hold: {}, holds: 0, kittens: [], boxes: [], balls: [], snowmen: [], webs: [], tornados: [], notes: [], spot: null, roll: 0, swing: null,
+      t: {}, hold: {}, holds: 0, pend: {}, plans: 0, cancels: 0, tornPlan: null, kittens: [], boxes: [], balls: [], snowmen: [], webs: [], tornados: [], notes: [], spot: null, roll: 0, swing: null,
       lastFacing: cat.facing, turnAcc: 0, straight: 0, straightDir: cat.facing
     };
-    ab.stage = stageFor(catches); aimLog.length = 0;
+    ab.stage = stageFor(catches); aimLog.length = 0; planLog.length = 0;
     syncKittens();
   }
   // ---- v9：自动瞄准打分器 aimBest + 不空放（命中数不够就按住，冷却不浪费）----
@@ -1032,7 +1032,9 @@
     return out.slice(0, k);
   }
   var aimLog = [];
-  function logAim(kind, hits, n) { aimLog.push({ k: kind, hits: hits, n: Math.round(n * 10) / 10, t: Math.round(elapsedPlayTime * 10) / 10 }); if (aimLog.length > 200) aimLog.shift(); }
+  var planLog = [];
+  function logPlan(k) { planLog.push({ k: k, t: Math.round(elapsedPlayTime * 1000) / 1000 }); if (planLog.length > 200) planLog.shift(); }
+  function logAim(kind, hits, n) { aimLog.push({ k: kind, hits: hits, n: Math.round(n * 10) / 10, t: Math.round(elapsedPlayTime * 1000) / 1000 }); if (aimLog.length > 200) aimLog.shift(); }
   // kind: "dir"（弹道）| "point"（落点）| "single"（单体）
   function aimBest(kind, o) {
     var esm = entityScaleMult, best = null, i, sc;
@@ -1073,14 +1075,24 @@
     return best;
   }
   // 冷却到了才尝试；fire() 返回 false（命中不够）时按住，0.2 秒后再看，冷却不浪费
+  // 两段式：先瞄准并显示指示（预告 0.25 秒），到点后重新瞄准校验再出手；
+  // 目标没了/不够最低命中数就取消，冷却不浪费（0.2 秒后重新预告）。
+  var AIM_TELEGRAPH = 0.25, aimPlanning = false;
   function cdTry(key, every, dt, fire) {
     ab.t[key] = (ab.t[key] == null ? every * 0.5 : ab.t[key]) - dt;
     if (ab.t[key] > 0) return false;
-    if (fire()) { ab.t[key] = every; ab.hold[key] = 0; return true; }
+    aimPlanning = !ab.pend[key];
+    var r = fire();
+    aimPlanning = false;
+    if (r === "plan") { logPlan(key); ab.pend[key] = 1; ab.t[key] = AIM_TELEGRAPH; ab.plans++; return false; }
+    var was = ab.pend[key]; ab.pend[key] = 0;
+    if (r) { ab.t[key] = every; ab.hold[key] = 0; return true; }
+    if (was) ab.cancels++;
     ab.t[key] = 0.2; ab.hold[key] = (ab.hold[key] || 0) + 1; ab.holds++;
     return false;
   }
-  function aimFx(o) { fx("aim", o.x, o.y, 0.8, o); }
+  function aimPlan(o) { if (!aimPlanning) return false; o.tele = AIM_TELEGRAPH; aimFx(o); return true; }
+  function aimFx(o) { fx("aim", o.x, o.y, 0.75, o); }
 
   function abProc() { ab.procs++; ab.flash = 0.5; }
   function cdReady(key, every, dt) {
@@ -1192,7 +1204,8 @@
       var tgts = [], nf = function (m) { return !(m.stun > 0); };
       for (var z = 0; z < K.length; z++) { var pk = aimBest("single", { maxR: 220 * esm, filt: nf, not: tgts, cluster: true }); if (pk) tgts.push(pk.m); }
       if (!tgts.length) return false;
-      logAim("pounce", tgts.length, tgts.length); aimFx({ x: tgts[0].x, y: tgts[0].y, r: 26 * esm, hits: tgts.length, ic: "🐱" });
+      if (aimPlan({ x: tgts[0].x, y: tgts[0].y, r: 26 * esm, hits: tgts.length, ic: "🐱", fm: tgts[0] })) return "plan";
+      logAim("pounce", tgts.length, tgts.length);
       {
         for (i = 0; i < K.length; i++) {
           k = K[i]; if (k.mode !== "follow") continue;
@@ -1210,7 +1223,8 @@
     if (S >= 4) cdTry("herd", 6, dt, function () { // 牧羊阵：3 只以上的鼠群圈成一团停在你前方
       var hp = aimBest("point", { maxR: 320 * esm, r: 100 * esm, los: false }), best = hp && hp.hits >= 3 ? nearestMice(hp.x, hp.y, 100 * esm, 8) : null;
       if (!best || best.length < 3) return false;
-      logAim("herd", best.length, hp.n); aimFx({ x: hp.x, y: hp.y, r: 100 * esm, hits: best.length, ic: "🌀" });
+      if (aimPlan({ x: hp.x, y: hp.y, r: 100 * esm, hits: best.length, ic: "🌀" })) return "plan";
+      logAim("herd", best.length, hp.n);
       {
         var mp3 = mouthPoint(70 * esm);
         for (i = 0; i < best.length; i++) { pullM(best[i], mp3.x + (Math.random() - 0.5) * 30 * esm, mp3.y + (Math.random() - 0.5) * 30 * esm, 170 * esm, 1.6); stunM(best[i], 2.6, "pin"); }
@@ -1237,9 +1251,10 @@
     cdTry("box", 10, dt, function () { // 纸箱放在前方 220 内"引诱范围里鼠最多"的点，至少 2 只
       var p = aimBest("point", { maxR: 220 * esm, minR: 50 * esm, r: 150 * esm, lead: 0.5, filt: function (m) { return m.beh !== "sleepy" && !(m.stun > 0); } });
       if (!p || p.hits < 2) return false;
+      if (aimPlan({ x: p.x, y: p.y, r: 150 * esm, hits: p.hits, ic: "📦" })) return "plan";
+      logAim("box", p.hits, p.n);
       if (B.length >= 3) { var old = B.shift(); releaseBox(old, 0); }
       B.push({ x: p.x, y: p.y, mice: [], closed: false, age: 0, shake: 0 }); abProc();
-      logAim("box", p.hits, p.n); aimFx({ x: p.x, y: p.y, r: 150 * esm, hits: p.hits, ic: "📦" });
       return true;
     });
     for (i = B.length - 1; i >= 0; i--) {
@@ -1271,6 +1286,7 @@
       var popped = [], any = 0;
       for (i = 0; i < B.length; i++) if (distance(B[i].x, B[i].y, cat.x, cat.y) < 500 * esm) any += B[i].mice.length;
       if (!any) return false;
+      if (aimPlan({ x: cat.x, y: cat.y, r: 80 * esm, hits: any, ic: "🎩" })) return "plan";
       logAim("magic", any, any);
       for (i = 0; i < B.length; i++) { if (distance(B[i].x, B[i].y, cat.x, cat.y) < 500 * esm) { popped = popped.concat(B[i].mice); B[i].mice = []; B[i].closed = false; fx("confetti", B[i].x, B[i].y, 1.2, {}); } }
       var perpA = cat.facing + Math.PI / 2, base = mouthPoint(60 * esm);
@@ -1296,8 +1312,9 @@
       var need = S >= 2 ? 2 : 1, len = 240 * esm * (S >= 2 ? 2 : 1.6);
       var bd = aimBest("dir", { len: len, halfW: 12 * esm, v: 240 * esm, filt: function (m) { return !(m.stun > 0); } });
       if (!bd || bd.hits < need) return false;
+      if (aimPlan({ x: cat.x, y: cat.y, a: bd.a, len: bd.len, hits: bd.hits, ic: "⚪", fc: true })) return "plan";
+      logAim("ball", bd.hits, bd.n);
       ab.balls.push({ x: cat.x, y: cat.y, a: bd.a, t: 0, r: 9, mice: [], rot: 0, trail: [] }); abProc();
-      logAim("ball", bd.hits, bd.n); aimFx({ x: cat.x, y: cat.y, a: bd.a, len: bd.len, hits: bd.hits, ic: "⚪" });
       return true;
     });
     for (i = ab.balls.length - 1; i >= 0; i--) {
@@ -1328,9 +1345,10 @@
     if (S >= 4) cdTry("snowman", 20, dt, function () { // 雪人立在射程（220）内鼠最多的位置附近
       var sp = aimBest("point", { maxR: 140 * esm, minR: 60 * esm, r: 220 * esm });
       if (!sp || sp.hits < 2) return false;
+      if (aimPlan({ x: sp.x, y: sp.y, r: 40 * esm, hits: sp.hits, ic: "☃️" })) return "plan";
+      logAim("snowman", sp.hits, sp.n);
       if (ab.snowmen.length >= 2) ab.snowmen.shift();
       ab.snowmen.push({ x: sp.x, y: sp.y, t: 0, life: 25, cd: 1 }); abProc();
-      logAim("snowman", sp.hits, sp.n); aimFx({ x: sp.x, y: sp.y, r: 40 * esm, hits: sp.hits, ic: "☃️" });
       return true;
     });
     for (i = ab.snowmen.length - 1; i >= 0; i--) {
@@ -1345,6 +1363,7 @@
     if (S >= 5) cdTry("blizzard", 30, dt, function () {
       var ring = nearestMice(cat.x, cat.y, 220 * esm, 20);
       if (ring.length < 4) return false;
+      if (aimPlan({ x: cat.x, y: cat.y, r: 220 * esm, hits: ring.length, ic: "❄️" })) return "plan";
       logAim("blizzard", ring.length, ring.length);
       for (i = 0; i < ring.length; i++) { freezeM(ring[i], 3, S); pullM(ring[i], cat.x, cat.y, 130 * esm, 2.5); }
       fx("blizzard", cat.x, cat.y, 1.6, { r: 220 * esm }); abProc();
@@ -1364,7 +1383,8 @@
       var tg = [];
       for (var z = 0; z < (S >= 2 ? 2 : 1); z++) { var pk = aimBest("single", { maxR: 240 * esm, not: tg, filt: function (q) { return !(q.stun > 0); } }); if (pk) tg.push(pk.m); }
       if (!tg.length) return false;
-      logAim("lasso", tg.length, tg.length); aimFx({ x: tg[0].x, y: tg[0].y, r: 22 * esm, hits: tg.length, ic: "🧶" });
+      if (aimPlan({ x: tg[0].x, y: tg[0].y, r: 22 * esm, hits: tg.length, ic: "🧶", fm: tg[0] })) return "plan";
+      logAim("lasso", tg.length, tg.length);
       for (i = 0; i < tg.length; i++) {
         m = tg[i];
         var dv = normalize(cat.x - m.x, cat.y - m.y), pd = Math.min(120 * esm, distance(m.x, m.y, cat.x, cat.y) - cat.r);
@@ -1409,6 +1429,7 @@
     if (S >= 5) cdTry("star", 25, dt, function () {
       var st = nearestMice(cat.x, cat.y, 200 * esm, 20);
       if (st.length < 3) return false;
+      if (aimPlan({ x: cat.x, y: cat.y, r: 200 * esm, hits: st.length, ic: "⭐" })) return "plan";
       logAim("star", st.length, st.length);
       for (i = 0; i < st.length; i++) { pullM(st[i], cat.x, cat.y, 250 * esm, 1.0); stunM(st[i], 1.2, "rope"); }
       fx("star", cat.x, cat.y, 1.2, { r: 200 * esm }); abProc();
@@ -1422,12 +1443,16 @@
     if (ab.tornados.length === 0 && ab.straight >= 2 && !(ab.t.windCd > 0) && !(ab.t.windWait > 0)) {
       // 落点：前方 200 内鼠最多处（预判 0.4 秒），范围内不足 2 只就按住不放
       var p = aimBest("point", { maxR: 200 * esm, minR: 40 * esm, r: 70 * esm, lead: 0.4 });
-      if (p && p.hits >= 2) {
+      if (p && p.hits >= 2 && !ab.tornPlan) { ab.tornPlan = { t: AIM_TELEGRAPH }; ab.plans++; logPlan("tornado"); aimFx({ x: p.x, y: p.y, r: 70 * esm, hits: p.hits, ic: "🌪", tele: AIM_TELEGRAPH }); }
+      else if (ab.tornPlan && ab.tornPlan.t > 0) { /* 预告中 */ }
+      else if (p && p.hits >= 2) {
+        ab.tornPlan = null;
         ab.tornados.push({ x: p.x, y: p.y, t: 0, life: S >= 2 ? 4 : 3, r: 60, hops: 0, follow: S >= 2, followAt: 1.2, sucked: 0 }); abProc();
-        logAim("tornado", p.hits, p.n); aimFx({ x: p.x, y: p.y, r: 70 * esm, hits: p.hits, ic: "🌪" });
-      } else { ab.t.windWait = 0.2; ab.holds++; ab.hold.tornado = (ab.hold.tornado || 0) + 1; }
+        logAim("tornado", p.hits, p.n);
+      } else { if (ab.tornPlan) { ab.tornPlan = null; ab.cancels++; } ab.t.windWait = 0.2; ab.holds++; ab.hold.tornado = (ab.hold.tornado || 0) + 1; }
     }
     if (ab.t.windWait > 0) ab.t.windWait -= dt;
+    if (ab.tornPlan) { ab.tornPlan.t -= dt; if (!(ab.straight >= 2) && ab.tornPlan.t <= -0.5) ab.tornPlan = null; }
     if (ab.t.windCd > 0) ab.t.windCd -= dt;
     if (S >= 4 && sharpTurn && !(ab.t.splitCd > 0)) {
       ab.t.splitCd = 5;
@@ -1450,12 +1475,15 @@
       }
       if (S >= 3 && tw.sucked > 0 && tw.hops < 3 && !tw.hopTo && tw.t > 0.8) { // 连锁跳
         var nx = aimBest("point", { x: tw.x, y: tw.y, maxR: 260 * esm, minR: tw.r * esm, r: tw.r * esm, lead: 0.35, los: false, filt: function (q) { return !(q.stun > 0); } });
-        if (nx) { logAim("hop", nx.hits, nx.n); aimFx({ x: nx.x, y: nx.y, r: tw.r * esm, hits: nx.hits, ic: "↪️" }); }
+        if (nx && !tw.hopPlan) { tw.hopPlan = tw.t; ab.plans++; logPlan("hop"); aimFx({ x: nx.x, y: nx.y, r: tw.r * esm, hits: nx.hits, ic: "↪️", tele: AIM_TELEGRAPH }); nx = null; }
+        else if (tw.hopPlan && tw.t - tw.hopPlan < AIM_TELEGRAPH) nx = null;
+        else if (tw.hopPlan) { tw.hopPlan = 0; if (!nx) ab.cancels++; }
+        if (nx) logAim("hop", nx.hits, nx.n);
         if (nx) { tw.hops++; tw.sucked = 0; tw.follow = false; tw.hx = tw.x; tw.hy = tw.y; tw.hopTo = { x: nx.x, y: nx.y }; tw.hopT0 = tw.t; tw.life = tw.t + 1.6; fx("hop", tw.x, tw.y, 0.4, { tx: nx.x, ty: nx.y }); }
       }
       if (tw.t > tw.life) { ab.tornados.splice(i, 1); if (!tw.vx) ab.t.windCd = 4; }
     }
-    if (S >= 5) cdTry("bigroll", 30, dt, function () { var c = countCircle(cat.x, cat.y, 210 * esm, 0); if (c.hits < 3) return false; logAim("bigroll", c.hits, c.n); ab.roll = 3; abProc(); return true; });
+    if (S >= 5) cdTry("bigroll", 30, dt, function () { var c = countCircle(cat.x, cat.y, 210 * esm, 0); if (c.hits < 3) return false; if (aimPlan({ x: cat.x, y: cat.y, r: 210 * esm, hits: c.hits, ic: "🌀" })) return "plan"; logAim("bigroll", c.hits, c.n); ab.roll = 3; abProc(); return true; });
     if (ab.roll > 0) { // 大胖龙卷：团成球滚 3 秒，沿途老鼠卷到嘴边
       ab.roll -= dt;
       var big = nearestMice(cat.x, cat.y, 140 * esm, 20);
@@ -1470,7 +1498,8 @@
       var tg = [];
       for (var z = 0; z < (S >= 2 ? 3 : 1); z++) { var pk = aimBest("single", { maxR: 260 * esm, not: tg, filt: function (q) { return !(q.stun > 0); } }); if (pk) tg.push(pk.m); }
       if (!tg.length) return false;
-      logAim("note", tg.length, tg.length); aimFx({ x: tg[0].x, y: tg[0].y, r: 22 * esm, hits: tg.length, ic: "🎵" });
+      if (aimPlan({ x: tg[0].x, y: tg[0].y, r: 22 * esm, hits: tg.length, ic: "🎵", fm: tg[0] })) return "plan";
+      logAim("note", tg.length, tg.length);
       var NOTE = ["♪", "♫", "♬"];
       for (i = 0; i < tg.length; i++) ab.notes.push({ k: "note", ch: NOTE[i % 3], c: ["#ff7a9a", "#7ab8ff", "#ffc24a"][i % 3], x: cat.x, y: cat.y - 20 * esm, tgt: tg[i], v: 300 });
       abProc(); fx("sing", cat.x, cat.y, 0.6, {});
@@ -1487,16 +1516,19 @@
     if (S >= 4) cdTry("spot", 20, dt, function () { // 聚光灯：密度最高处（小偷鼠 ×2），至少 3 只
       var best = aimBest("point", { maxR: 360 * esm, r: 100 * esm, los: false, wfn: function (q) { var w = aimW(q); return q.beh === "thief" ? w * 2 : w; } });
       if (!best || best.hits < 3) return false;
+      if (aimPlan({ x: best.x, y: best.y, r: 100 * esm, hits: best.hits, ic: "🔦" })) return "plan";
       var bow = nearestMice(best.x, best.y, 100 * esm, 14);
+      if (bow.length < 3) return false;
+      logAim("spot", bow.length, best.n);
       for (i = 0; i < bow.length; i++) { stunM(bow[i], 2.5, "bow"); if (bow[i].beh === "thief") { bow[i].beh = "forager"; bow[i].food = null; fx("bang", bow[i].x, bow[i].y, 0.4, {}); } }
       ab.spot = { x: best.x, y: best.y, t: 2.5, r: 100 * esm }; abProc();
-      logAim("spot", bow.length, best.n); aimFx({ x: best.x, y: best.y, r: 100 * esm, hits: bow.length, ic: "🔦" });
       return true;
     });
     if (ab.spot) { ab.spot.t -= dt; if (ab.spot.t <= 0) ab.spot = null; }
     if (S >= 5) cdTry("choir", 30, dt, function () {
       var ch = nearestMice(cat.x, cat.y, 320 * esm, 24);
       if (ch.length < 3) return false;
+      if (aimPlan({ x: cat.x, y: cat.y, r: 320 * esm, hits: ch.length, ic: "🎤" })) return "plan";
       logAim("choir", ch.length, ch.length);
       for (i = 0; i < ch.length; i++) {
         var ang = cat.facing - Math.PI / 2 + Math.PI * (ch.length === 1 ? 0.5 : i / (ch.length - 1));
@@ -1639,8 +1671,11 @@
     }
     for (i = 0; i < ab.fx.length; i++) {
       var f = ab.fx[i], k = f.age / f.life, fx0 = SX(f.x), fy0 = SY(f.y), a = 1 - k;
-      if (f.k === "aim") { // 自动瞄准指示：虚线弹道 / 落点圈 + 预计命中 ×N
-        var aa = Math.min(1, (1 - k) * 1.6), lx, ly;
+      if (f.k === "aim") { // 自动瞄准指示：出手前 0.25 秒预告（虚线弹道 / 落点圈 + 预计命中 ×N），出手后淡出
+        if (f.fm && mice.indexOf(f.fm) >= 0 && !f.fm.hidden) { f.x = f.fm.x; f.y = f.fm.y; }
+        if (f.fc && f.age < (f.tele || 0)) { f.x = cat.x; f.y = cat.y; }
+        fx0 = SX(f.x); fy0 = SY(f.y);
+        var pre = f.age < (f.tele || 0), aa = pre ? 0.6 + 0.4 * Math.sin(f.age * 40) : Math.min(1, (1 - k) * 1.6), lx, ly;
         ctx.save(); ctx.globalAlpha = aa; ctx.setLineDash([8 * sc, 6 * sc]); ctx.lineWidth = 3 * sc; ctx.strokeStyle = "rgba(255,255,255,.95)";
         if (f.a != null) { var L = s(f.len); ctx.beginPath(); ctx.moveTo(fx0, fy0); ctx.lineTo(fx0 + Math.cos(f.a) * L, fy0 + Math.sin(f.a) * L); ctx.stroke(); lx = fx0 + Math.cos(f.a) * L * 0.6; ly = fy0 + Math.sin(f.a) * L * 0.6; }
         else { var AR = s(f.r) * (0.85 + 0.15 * Math.min(1, k * 4)); ctx.beginPath(); ctx.arc(fx0, fy0, AR, 0, Math.PI * 2); ctx.stroke(); ctx.setLineDash([]); ctx.strokeStyle = "rgba(255,90,120,.9)"; ctx.lineWidth = 2 * sc; ctx.beginPath(); ctx.moveTo(fx0 - 6 * sc, fy0); ctx.lineTo(fx0 + 6 * sc, fy0); ctx.moveTo(fx0, fy0 - 6 * sc); ctx.lineTo(fx0, fy0 + 6 * sc); ctx.stroke(); lx = fx0; ly = fy0 - AR - 10 * sc; }
@@ -3118,14 +3153,16 @@
     get mice() { return mice.map(function (m) { return { x: m.x, y: m.y, type: m.type, state: m.state, beh: m.beh, under: !!m.under, asleep: !!m.asleep, leader: !!m.leader, packId: m.packId || 0, stun: m.stun > 0 }; }); },
     get behCounts() { var c = {}; mice.forEach(function (m) { c[m.beh] = (c[m.beh] || 0) + 1; }); return c; },
     get aimLog() { return aimLog.slice(); },
-    get holds() { return ab ? { total: ab.holds, by: ab.hold } : null; },
+    get planLog() { return planLog.slice(); },
+    get holds() { return ab ? { total: ab.holds, by: ab.hold, plans: ab.plans, cancels: ab.cancels } : null; },
+    get aimFxLive() { return ab ? ab.fx.filter(function (f) { return f.k === "aim"; }).map(function (f) { return { age: f.age, tele: f.tele, hits: f.hits, ic: f.ic }; }) : []; },
     get drawStats() { return { drawn: drawStats.drawn, full: drawStats.full, pool: mousePool.length, total: mice.length }; },
     get perf() { return { last: perfWin.last, hist: perfWin.hist.slice(), resScale: resScale, dpr: DPR, updMs: Math.round(perfWin.upd * 100) / 100, drawMs: Math.round(perfWin.drw * 100) / 100 }; },
     setForceBeh: function (b) { forceBeh = b || null; },
     setNoSpawn: function (v) { noSpawn = !!v; },
     setDrawFlags: function (f) { dbgDraw = f || {}; },
     setResScale: function (v) { resScale = v; resize(); },
-    clearMice: function () { while (mice.length) recycleMouse(mice.length - 1); },
+    clearMice: function () { if (ab) ab.boxes.forEach(function (b) { b.mice = []; }); while (mice.length) recycleMouse(mice.length - 1); },
     spawnBehNear: function (dx, dy, beh, n) { for (var i = 0; i < (n || 1); i++) spawnMouseAt(cat.x + dx + (Math.random() - 0.5) * 30, cat.y + dy + (Math.random() - 0.5) * 30, typeForBeh(beh, currentDifficulty()), currentDifficulty(), beh); },
     get abilityPanelOpen() { return !dom.abilityScreen.classList.contains("hidden"); },
     get score() { return score; },
