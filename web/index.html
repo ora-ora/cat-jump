@@ -19,6 +19,7 @@
       <div id="rankText" class="hud-pill small">排名：--</div>
     </div>
     <div id="hudRight">
+      <button id="hudLbBtn" class="icon-btn lb-hud-btn" aria-label="排行榜">🏆<span>排行</span></button>
       <button id="pauseBtn" class="icon-btn" aria-label="暂停">⏸</button>
       <button id="muteBtn" class="icon-btn" aria-label="静音切换">🔊</button>
     </div>
@@ -88,6 +89,7 @@
   <div id="leaderboardScreen" class="overlay hidden">
     <div class="panel">
       <h2>排行榜</h2>
+      <p class="lb-sub hidden" id="lbSub">游戏已暂停 · 每 5 秒自动刷新</p>
       <div id="leaderboardList" class="leaderboard-list"></div>
       <button id="leaderboardCloseBtn" class="btn-secondary">关闭</button>
     </div>

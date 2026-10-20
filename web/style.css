@@ -399,3 +399,10 @@ html, body { background: #a8de8e; }
 .lb-score { color: #ff8a3d; }
 #leaderboardScreen { background: rgba(255, 244, 232, 0.94); }
 .lb-badge { margin-right: 8px; }
+
+.lb-hud-btn { width: auto; padding: 0 12px 0 9px; border-radius: 999px; gap: 3px; font-size: 16px; }
+.lb-hud-btn span { font-size: 13px; font-weight: 900; color: #fff; }
+.lb-sub { font-size: 12px; color: #b08a6a; margin: -6px 0 4px; }
+.lb-row.me { background: #fff1e2; border-radius: 12px; border-bottom-color: transparent; box-shadow: inset 0 0 0 2px #ff9d4d; }
+.lb-row.me .lb-name { font-weight: 900; color: #e0602a; }
+.lb-me-tag { font-size: 11px; font-weight: 800; background: #ff9d4d; color: #fff; border-radius: 999px; padding: 1px 7px; margin-right: 6px; flex-shrink: 0; }

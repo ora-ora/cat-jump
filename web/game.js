@@ -1250,11 +1250,13 @@
     var since = now - run.lastSentAt;
     if (since < HEARTBEAT_MIN_INTERVAL_MS) return;
     var dueInterval;
-    if (state === STATE_PAUSE) dueInterval = HEARTBEAT_PAUSED_INTERVAL_MS;
+    if (run.forceNext) dueInterval = HEARTBEAT_MIN_INTERVAL_MS;
+    else if (state === STATE_PAUSE) dueInterval = HEARTBEAT_PAUSED_INTERVAL_MS;
     else dueInterval = (score !== run.lastSentScore) ? HEARTBEAT_ACTIVE_INTERVAL_MS : HEARTBEAT_IDLE_INTERVAL_MS;
     if (since < dueInterval) return;
     run.lastSentAt = now;
     run.lastSentScore = score;
+    run.forceNext = false;
     rpcPost("heartbeat", heartbeatPayload(state === STATE_PAUSE ? "paused" : "playing"));
   }
 
@@ -1330,22 +1332,41 @@
     return lo + 1;
   }
 
+  // 快照：其他人的分数（降序）+ 自己的精确名次（按 live_run_id 识别自己）
+  var mySnapshotRank = null;
   function applySnapshotToHud() {
-    if (!backendConfigured || leaderboardSnapshot.length === 0) { dom.rankText.textContent = "排名：--"; return; }
-    var rank = estimateRank(leaderboardSnapshot, score);
-    dom.rankText.textContent = rank > leaderboardSnapshot.length
-      ? ("排名：" + leaderboardSnapshot.length + "+ 名")
-      : ("当前约第 " + rank + " 名");
+    if (!backendConfigured || (leaderboardSnapshot.length === 0 && mySnapshotRank == null)) { dom.rankText.textContent = "排名：--"; return; }
+    if (run.id == null) {
+      var est = estimateRank(leaderboardSnapshot, score);
+      dom.rankText.textContent = est > leaderboardSnapshot.length ? ("排名：" + leaderboardSnapshot.length + "+ 名") : ("当前约第 " + est + " 名");
+      return;
+    }
+    // 名次口径与服务端一致：分数高者在前，同分时别人先达到 → 排在我前面。
+    var ahead = 0;
+    for (var i = 0; i < leaderboardSnapshot.length; i++) { if (leaderboardSnapshot[i] >= score) ahead++; else break; }
+    var rank = ahead + 1;
+    if (leaderboardSnapshot.length >= LEADERBOARD_SNAPSHOT_LIMIT - 1 && ahead >= leaderboardSnapshot.length) {
+      dom.rankText.textContent = "排名：" + LEADERBOARD_SNAPSHOT_LIMIT + "+ 名";
+    } else {
+      dom.rankText.textContent = "排名：第 " + rank + " 名";
+    }
   }
 
-  function refreshSnapshotIfDue(now) {
+  function refreshSnapshotIfDue(now, force) {
     if (!backendConfigured) return;
-    if (leaderboardSnapshotAt !== 0 && now - leaderboardSnapshotAt < LEADERBOARD_POLL_INTERVAL_MS) return;
+    if (!force && leaderboardSnapshotAt !== 0 && now - leaderboardSnapshotAt < LEADERBOARD_POLL_INTERVAL_MS) return;
     leaderboardSnapshotAt = now;
-    restGet("/rest/v1/leaderboard_live?select=display_score&order=display_score.desc&limit=" + LEADERBOARD_SNAPSHOT_LIMIT)
+    restGet("/rest/v1/leaderboard_live?select=display_score,rank,live_run_id&order=rank.asc&limit=" + LEADERBOARD_SNAPSHOT_LIMIT)
       .then(function (res) {
         if (!res.ok) return;
-        leaderboardSnapshot = res.rows.map(function (r) { return r.display_score; }).sort(function (a, b) { return b - a; });
+        mySnapshotRank = null;
+        var others = [];
+        for (var i = 0; i < res.rows.length; i++) {
+          var r = res.rows[i];
+          if (run.id != null && r.live_run_id === run.id) mySnapshotRank = r.rank;
+          else others.push(r.display_score);
+        }
+        leaderboardSnapshot = others.sort(function (a, b) { return b - a; });
         if (state === STATE_PLAY) applySnapshotToHud();
       });
   }
@@ -1470,7 +1491,7 @@
       dom.leaderboardList.innerHTML = '<div class="lb-error">排行榜未配置</div>';
       return;
     }
-    restGet("/rest/v1/leaderboard_live?select=nickname,display_score,is_live,is_paused,skin,rank&order=rank.asc&limit=" + LEADERBOARD_TOPN_LIMIT)
+    restGet("/rest/v1/leaderboard_live?select=nickname,display_score,is_live,is_paused,skin,rank,live_run_id&order=rank.asc&limit=" + LEADERBOARD_TOPN_LIMIT)
       .then(function (res) {
         if (!res.ok) { dom.leaderboardList.innerHTML = '<div class="lb-error">暂时无法连接排行榜</div>'; return; }
         if (res.rows.length === 0) { dom.leaderboardList.innerHTML = '<div class="lb-empty">还没有人上榜，来当第一个吧！</div>'; return; }
@@ -1481,10 +1502,11 @@
           if (row.is_live) badge = '<span class="lb-badge live">游戏中</span>';
           else if (row.is_paused) badge = '<span class="lb-badge paused">已暂停</span>';
           var skinId = SKIN_IDS.indexOf(row.skin) >= 0 ? row.skin : "orange";
-          html += '<div class="lb-row"><span class="lb-rank">' + (row.rank != null ? row.rank : i + 1) + '</span>' +
+          var isMe = run.id != null && row.live_run_id === run.id;
+          html += '<div class="lb-row' + (isMe ? ' me' : '') + '"><span class="lb-rank">' + (row.rank != null ? row.rank : i + 1) + '</span>' +
             '<img class="lb-avatar" alt="" src="' + window.CatArt.avatarDataUrl(skinId) + '">' +
             '<span class="lb-name">' + escapeHtml(row.nickname || "匿名猫") + '</span>' +
-            badge + '<span class="lb-score">' + row.display_score + '</span></div>';
+            (isMe ? '<span class="lb-me-tag">我</span>' : badge) + '<span class="lb-score">' + row.display_score + '</span></div>';
         }
         dom.leaderboardList.innerHTML = html;
       });
@@ -1502,6 +1524,8 @@
     comboText: document.getElementById("comboText"),
     rankText: document.getElementById("rankText"),
     pauseBtn: document.getElementById("pauseBtn"),
+    hudLbBtn: document.getElementById("hudLbBtn"),
+    lbSub: document.getElementById("lbSub"),
     muteBtn: document.getElementById("muteBtn"),
     endRunBtn: document.getElementById("endRunBtn"),
     startScreen: document.getElementById("startScreen"),
@@ -1588,12 +1612,14 @@
   function enterPause() {
     if (state !== STATE_PLAY) return;
     state = STATE_PAUSE;
+    run.forceNext = true; // 尽快上报"已暂停"，让服务端跳过暂停期间的时长漂移检查
     showScreen(dom.pauseScreen);
   }
 
   function resumePlay() {
     if (state !== STATE_PAUSE) return;
     state = STATE_PLAY;
+    run.forceNext = true;
     hideScreen(dom.pauseScreen);
   }
 
@@ -1614,10 +1640,36 @@
     finishRun();
   }
 
+  var lbFromPlay = false, lbRefreshTimer = null;
   function openLeaderboard() {
     sfx.click();
     showScreen(dom.leaderboardScreen);
     loadTopScores();
+  }
+  // 局内查看排行榜：暂停游戏（心跳上报 paused），打开期间每 5 秒刷新，关闭后自动继续。
+  function openInGameLeaderboard() {
+    if (state !== STATE_PLAY) return;
+    sfx.click();
+    state = STATE_PAUSE;
+    run.forceNext = true;
+    lbFromPlay = true;
+    dom.lbSub.classList.remove("hidden");
+    showScreen(dom.leaderboardScreen);
+    loadTopScores();
+    lbRefreshTimer = setInterval(loadTopScores, 5000);
+  }
+  function closeLeaderboard() {
+    hideScreen(dom.leaderboardScreen);
+    dom.lbSub.classList.add("hidden");
+    if (lbRefreshTimer) { clearInterval(lbRefreshTimer); lbRefreshTimer = null; }
+    if (lbFromPlay) {
+      lbFromPlay = false;
+      if (state === STATE_PAUSE && dom.pauseScreen.classList.contains("hidden")) {
+        state = STATE_PLAY;
+        run.forceNext = true;
+        refreshSnapshotIfDue(Date.now(), true);
+      }
+    }
   }
 
   document.addEventListener("visibilitychange", function () {
@@ -1651,7 +1703,12 @@
   });
   dom.showLeaderboardBtnStart.addEventListener("click", openLeaderboard);
   dom.showLeaderboardBtnResult.addEventListener("click", openLeaderboard);
-  dom.leaderboardCloseBtn.addEventListener("click", function () { hideScreen(dom.leaderboardScreen); });
+  dom.leaderboardCloseBtn.addEventListener("click", closeLeaderboard);
+  dom.hudLbBtn.addEventListener("click", openInGameLeaderboard);
+  // 按钮上的按下事件不传给画布，避免误移动小猫
+  ["pointerdown", "touchstart", "mousedown"].forEach(function (ev) {
+    dom.hudLbBtn.addEventListener(ev, function (e) { e.stopPropagation(); }, { passive: true });
+  });
 
   // =======================================================================
   // Main loop
@@ -1839,6 +1896,8 @@
     get combo() { return combo; },
     get chunkCount() { return chunkCache.size; },
     get rankText() { return dom.rankText.textContent; },
+    get runId() { return run.id; },
+    get myRank() { return mySnapshotRank; },
     get skin() { return currentSkin; },
     selectSkin: selectSkin,
     setFacing: function (a) { cat.facing = a; },
