@@ -397,6 +397,7 @@
   var mice = [];
 
   function resetWorld() {
+    catAnim = newAnim(); gulp = null; dustPuffs.length = 0;
     worldSeed = (Math.random() * 2147483647) | 0;
     chunkCache.clear();
     mice.length = 0;
@@ -752,6 +753,7 @@
     spawnScorePopup(m.x, m.y, gained);
     spawnCatchParticles(m.x, m.y);
     cat.squash = 1;
+    startGulp(m);
     if (m.type === "grey") sfx.catchGrey();
     else if (m.type === "brown") sfx.catchBrown();
     else sfx.catchGold();
@@ -949,17 +951,89 @@
     ctx.restore();
   }
 
-  // 朝向：Q版不整体旋转，左右镜像 + 朝上/下时轻微前倾/后仰（8 方向都可辨）
-  function drawCreature(spr, x, y, scaleUnit, angle, bob, squash) {
-    var cosA = Math.cos(angle), sinA = Math.sin(angle);
-    var flip = cosA < -0.05 ? -1 : 1;
-    var tilt = sinA * 0.26 * flip;
-    var sxk = (1 + squash * 0.25), syk = (1 - squash * 0.22);
+  // ---- 分方向动画（anim.js 精灵；只影响画面）----
+  var ANIM = window.CatAnim;
+  var SPRITE_DPR_CAP = 2;
+  var RUN_SPEED_CAT = 12, RUN_SPEED_MOUSE = 4;
+  var SIT_DELAY = 0.25, SIT_DOWN_T = 0.16, STAND_UP_T = 0.12, GULP_T = 0.45;
+  var dustPuffs = [];
+  var gulp = null; // { t, dir, type }
+
+  function newAnim() { return { mode: "sit", t: 0, still: 1, dir: 2, phase: Math.random() * 3, lastRunFrame: -1, dustT: 0 }; }
+  var catAnim = newAnim();
+
+  function stepAnim(a, dt, moving, angle) {
+    a.t += dt;
+    if (moving) {
+      a.dir = ANIM.dirOf(angle);
+      a.still = 0;
+      if (a.mode === "sit" || a.mode === "sitdown") { a.mode = "stand"; a.t = 0; }
+      else if (a.mode === "stand" && a.t >= STAND_UP_T) { a.mode = "run"; a.t = 0; }
+    } else {
+      a.still += dt;
+      if ((a.mode === "run" || a.mode === "stand") && a.still > SIT_DELAY) { a.mode = "sitdown"; a.t = 0; }
+      else if (a.mode === "sitdown" && a.t >= SIT_DOWN_T) { a.mode = "sit"; a.t = 0; }
+    }
+  }
+  // 返回 [state, frame]
+  var CAT_SIT_SCHED = [[1.2, 2], [1.45, 3], [2.0, 2], [2.3, 4], [2.6, 2], [3.2, 5]];
+  var MOUSE_SIT_SCHED = [[0.6, 2], [0.8, 3], [1.1, 2], [1.3, 4], [1.6, 2], [1.9, 5], [2.0, 2]];
+  function sitFrame(t, sched) {
+    var len = sched[sched.length - 1][0], u = t % len;
+    for (var i = 0; i < sched.length; i++) if (u < sched[i][0]) return sched[i][1];
+    return 2;
+  }
+  function animFrame(a, runCycle, sched) {
+    if (a.mode === "run") return ["run", Math.floor(runCycle) % 4];
+    if (a.mode === "sitdown") return ["sit", a.t < SIT_DOWN_T / 2 ? 0 : 1];
+    if (a.mode === "stand") return ["sit", a.t < STAND_UP_T / 2 ? 1 : 0];
+    return ["sit", sitFrame(a.t + a.phase, sched)];
+  }
+
+  function spawnDust(wx, wy, angle, size) {
+    if (dustPuffs.length > 40) dustPuffs.shift();
+    dustPuffs.push({ x: wx - Math.cos(angle) * size * 0.8 + (Math.random() - 0.5) * size * 0.4,
+      y: wy + size * 0.7, age: 0, life: 0.45, s: size * (0.35 + Math.random() * 0.15) });
+  }
+
+  function updateAnims(dt) {
+    var catSpeed = Math.sqrt(cat.vx * cat.vx + cat.vy * cat.vy);
+    stepAnim(catAnim, dt, catSpeed > RUN_SPEED_CAT, cat.facing);
+    if (catAnim.mode === "run") {
+      var f = Math.floor(cat.runCycle) % 4;
+      if (f !== catAnim.lastRunFrame && (f === 3 || f === 1)) spawnDust(cat.x, cat.y, cat.facing, cat.r);
+      catAnim.lastRunFrame = f;
+    }
+    for (var i = 0; i < mice.length; i++) {
+      var m = mice[i];
+      if (!m.anim) m.anim = newAnim();
+      var sp = Math.abs(m.vx) + Math.abs(m.vy);
+      stepAnim(m.anim, dt, sp > RUN_SPEED_MOUSE, m.facing);
+      if (m.anim.mode === "run") {
+        m.anim.dustT += dt;
+        if (m.anim.dustT > 0.22) { m.anim.dustT = 0; spawnDust(m.x, m.y, m.facing, m.r * 0.8); }
+      }
+    }
+    for (i = dustPuffs.length - 1; i >= 0; i--) {
+      dustPuffs[i].age += dt;
+      if (dustPuffs[i].age >= dustPuffs[i].life) dustPuffs.splice(i, 1);
+    }
+    if (gulp) { gulp.t += dt; if (gulp.t >= GULP_T) gulp = null; }
+  }
+
+  function startGulp(m) {
+    gulp = { t: 0, dir: catAnim.dir, type: m.type };
+  }
+
+  function spritePx(u) { return quant(u * Math.min(DPR, SPRITE_DPR_CAP)); }
+
+  // (x, y) = 精灵单位原点（实体中心）的屏幕坐标；g = 缩放锚点（脚底）相对原点的单位偏移
+  function blit(spr, x, y, u, flip, sx, sy, g) {
+    g = g || 0;
     ctx.save();
-    ctx.translate(x, y - bob);
-    ctx.rotate(tilt);
-    ctx.scale(flip * sxk / (scaleUnit.px), syk / (scaleUnit.px));
-    ctx.drawImage(spr.cv, -spr.ox, -spr.oy);
+    ctx.translate(x, y + g * u);
+    ctx.scale(flip * u / spr.px * (sx || 1), u / spr.px * (sy || 1));
+    ctx.drawImage(spr.cv, -spr.ox * spr.px, -(spr.oy + g) * spr.px);
     ctx.restore();
   }
 
@@ -967,19 +1041,53 @@
     ART.ellipse(ctx, x, y, rx, rx * 0.28, "rgba(40,90,30,0.2)");
   }
 
-  function drawCatAt(x, y, r, angle, runCycle, squash, moving, happy) {
+  function drawDust() {
+    for (var i = 0; i < dustPuffs.length; i++) {
+      var d = dustPuffs[i];
+      var k = d.age / d.life;
+      var sx = worldToScreenX(d.x), sy = worldToScreenY(d.y) - k * s(6);
+      var r = s(d.s) * (0.7 + k * 0.8);
+      ctx.globalAlpha = (1 - k) * 0.85;
+      ART.ellipse(ctx, sx, sy, r, r * 0.75, "#f3ead6", "rgba(200,180,140,0.6)", 1.2);
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  // 被吞老鼠：F0-F2 从嘴前方缩小飞入；背面视图画在小猫身后
+  var GULP_MOUTH = { front: [0, 6], q34: [14, 6], side: [44, -8], b34: [20, -30], back: [0, -34] };
+  function drawGulpMouse(x, y, u, view, flip, behind) {
+    if (!gulp) return;
+    var isBack = ANIM.isBack(view);
+    if (behind !== isBack) return;
+    var k = gulp.t / (GULP_T * 0.45);
+    if (k >= 1) return;
+    var mp = GULP_MOUTH[view];
+    var start = isBack ? [mp[0], mp[1] - 40] : (view === "side" ? [mp[0] + 30, mp[1]] : [mp[0] + (view === "q34" ? 20 : 0), mp[1] + 40]);
+    var px = start[0] + (mp[0] - start[0]) * k, py = start[1] + (mp[1] - start[1]) * k;
+    var mu = u * 0.55 * (1 - k * 0.8);
+    var spr = ANIM.mouseSprite(gulp.type, isBack ? "back" : "front", "sit", 2, spritePx(mu));
+    ctx.globalAlpha = isBack ? 1 - k * 0.7 : 1;
+    blit(spr, x + px * u * flip, y + py * u, mu, flip);
+    ctx.globalAlpha = 1;
+  }
+
+  function drawCatAt(x, y, r, a, runCycle, skin) {
     var u = r * CAT_UNIT_PER_R;
-    var px = quant(u * DPR);
-    var spr = ART.catSprite(currentSkin, px, happy);
-    var bob = moving ? Math.abs(Math.sin(runCycle * 2)) * r * 0.22 : 0;
-    var breathe = moving ? 0 : Math.sin(runCycle * 2.2) * 0.04;
-    shadow(x, y + 46 * u, 30 * u * (1 - bob / (r * 0.6)));
-    drawCreature(spr, x, y, { px: px / u }, angle, bob, squash - breathe);
+    var dirInfo = ANIM.DIR8[gulp ? gulp.dir : a.dir];
+    var view = dirInfo[0], flip = dirInfo[1];
+    var st;
+    if (gulp) st = ["gulp", Math.min(4, Math.floor(gulp.t / (GULP_T / 5)))];
+    else st = animFrame(a, runCycle, CAT_SIT_SCHED);
+    var sitting = st[0] === "sit" && a.mode === "sit";
+    var breathe = sitting ? Math.sin((a.t + a.phase) * 2.4) * 0.03 : 0;
+    shadow(x, y + 46 * u, (st[0] === "run" ? 30 : 26) * u);
+    drawGulpMouse(x, y, u, view, flip, true);
+    blit(ANIM.catSprite(skin, view, st[0], st[1], spritePx(u)), x, y, u, flip, 1 - breathe * 0.5, 1 + breathe, 46);
+    drawGulpMouse(x, y, u, view, flip, false);
   }
 
   function drawCat() {
-    var moving = Math.abs(cat.vx) + Math.abs(cat.vy) > 8;
-    drawCatAt(worldToScreenX(cat.x), worldToScreenY(cat.y), s(cat.r), cat.facing, cat.runCycle, cat.squash, moving, cat.squash > 0.4);
+    drawCatAt(worldToScreenX(cat.x), worldToScreenY(cat.y) - 0, s(cat.r), catAnim, cat.runCycle, currentSkin);
   }
 
   function drawMice() {
@@ -987,17 +1095,18 @@
       var m = mice[i];
       var sx = worldToScreenX(m.x), sy = worldToScreenY(m.y);
       if (sx < -60 || sx > W + 60 || sy < -60 || sy > H + 60) continue;
+      if (!m.anim) m.anim = newAnim();
       var r = s(m.r);
       var u = r * MOUSE_UNIT_PER_R;
-      var px = quant(u * DPR);
-      var moving = Math.abs(m.vx) + Math.abs(m.vy) > 4;
-      var bob = moving ? Math.abs(Math.sin(m.runCycle * 2.4)) * r * 0.25 : 0;
-      shadow(sx, sy + 22 * u, 20 * u);
-      drawCreature(ART.mouseSprite(m.type, px), sx, sy, { px: px / u }, m.facing, bob, 0);
+      var d = ANIM.DIR8[m.anim.dir];
+      var st = animFrame(m.anim, m.runCycle * 1.4, MOUSE_SIT_SCHED);
+      shadow(sx, sy + 24 * u, (st[0] === "run" ? 20 : 16) * u);
+      blit(ANIM.mouseSprite(m.type, d[0], st[0], st[1], spritePx(u)), sx, sy, u, d[1]);
       if (m.type === "gold") {
         var tw = (Math.sin(m.runCycle * 3 + i) + 1) / 2;
-        ART.star(ctx, sx + 26 * u, sy - 20 * u - bob, (3 + tw * 3) * u * 1.4, "rgba(255,236,140," + (0.5 + tw * 0.5) + ")");
-        ART.star(ctx, sx - 28 * u, sy - 6 * u - bob, (2 + (1 - tw) * 3) * u * 1.4, "rgba(255,236,140," + (1 - tw * 0.5) + ")");
+        var top = st[0] === "sit" ? -40 : -24;
+        ART.star(ctx, sx + 24 * u, sy + top * u, (3 + tw * 3) * u * 1.4, "rgba(255,236,140," + (0.5 + tw * 0.5) + ")");
+        ART.star(ctx, sx - 26 * u, sy + (top + 18) * u, (2 + (1 - tw) * 3) * u * 1.4, "rgba(255,236,140," + (1 - tw * 0.5) + ")");
       }
     }
   }
@@ -1569,6 +1678,7 @@
       trySpawnMouse();
       updateComboTimer(dt);
       updateEffects(dt);
+      updateAnims(dt);
       updateHud();
       refreshSnapshotIfDue(Date.now());
       maybeSendHeartbeat(Date.now());
@@ -1581,13 +1691,15 @@
   function drawIdleScene() {
     drawGround();
     idleRunCycle += 0.016;
-    drawCatAt(W / 2, H / 2 + s(20), s(CAT_RADIUS * entityScaleMult), 0, idleRunCycle, 0, false, false);
+    catAnim.t += 0.016;
+    drawCatAt(W / 2, H / 2 + s(20), s(CAT_RADIUS * entityScaleMult), catAnim, idleRunCycle, currentSkin);
   }
 
   function draw() {
     if (state === STATE_START) { drawIdleScene(); return; }
     drawBackground();
     drawObstacles();
+    drawDust();
     drawMice();
     drawCat();
     drawEffects();
@@ -1730,6 +1842,9 @@
     get skin() { return currentSkin; },
     selectSkin: selectSkin,
     setFacing: function (a) { cat.facing = a; },
+    get catAnim() { return { mode: catAnim.mode, dir: catAnim.dir, gulp: !!gulp }; },
+    get spriteStats() { return ANIM.stats(); },
+    freezeMice: function () { mice.forEach(function (m) { m.speed = 0; m.vx = 0; m.vy = 0; }); },
     allRandomNames: allRandomNames,
     randomNameOk: randomNameOk,
     randomCuteName: randomCuteName,
