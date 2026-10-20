@@ -6,9 +6,9 @@
   // =======================================================================
 
   // TODO(站长): 填入 https://<project-ref>.supabase.co
-  var SUPABASE_URL = "";
+  var SUPABASE_URL = "https://dzarlikttkosqkcfixbx.supabase.co";
   // TODO(站长): 填入 publishable key (sb_publishable_...)
-  var SUPABASE_ANON_KEY = "";
+  var SUPABASE_ANON_KEY = "sb_publishable_TOkle8Wiqr-lTZ8hHOIiUg_19ykO4Co";
 
   var LEADERBOARD_SNAPSHOT_LIMIT = 500;
   var LEADERBOARD_TOPN_LIMIT = 50;
