@@ -56,6 +56,10 @@
       <h2>已暂停</h2>
       <button id="resumeBtn" class="btn-primary">继续</button>
       <button id="endRunBtn" class="btn-secondary">结束本局</button>
+      <div class="audio-set" id="audioSet">
+        <label><input type="checkbox" id="bgmOn"> 🎵 音乐</label><input type="range" id="bgmVol" min="0" max="100" aria-label="音乐音量">
+        <label><input type="checkbox" id="sfxOn"> 🔔 音效</label><input type="range" id="sfxVol" min="0" max="100" aria-label="音效音量">
+      </div>
     </div>
   </div>
 
@@ -112,6 +116,7 @@
   </div>
 </div>
 <script src="version.js?v=__BUILD__"></script>
+<script src="audio.js?v=__BUILD__"></script>
 <script src="art.js?v=__BUILD__"></script>
 <script src="anim.js?v=__BUILD__"></script>
 <script src="game.js?v=__BUILD__"></script>

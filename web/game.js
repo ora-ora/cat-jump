@@ -126,88 +126,30 @@
   // Audio engine (Web Audio 合成，无外部音频文件)
   // =======================================================================
 
-  var audioCtx = null;
-  var masterGain = null;
-  var muted = storageGet("catmouse_muted", "0") === "1";
+  // 音频全部在 audio.js（CatAudio）里实时合成：生成式 BGM + 音效；这里只做薄封装
+  var CA = window.CatAudio || { unlock: function () {}, sfx: {}, settings: { master: true }, setIntensity: function () {}, setMuffle: function () {}, set: function () {} };
+  var muted = !CA.settings.master;
   // 小猫皮肤：纯外观；本地记住上次选择，同时随 start_run 存到服务端（排行榜头像）
   var SKIN_IDS = window.CatArt.SKINS.map(function (k) { return k.id; });
   var currentSkin = storageGet("catmouse_skin", "orange");
   if (SKIN_IDS.indexOf(currentSkin) < 0) currentSkin = "orange";
 
-  function ensureAudio() {
-    if (audioCtx) {
-      if (audioCtx.state === "suspended") audioCtx.resume();
-      return;
-    }
-    try {
-      var AC = window.AudioContext || window.webkitAudioContext;
-      audioCtx = new AC();
-      masterGain = audioCtx.createGain();
-      masterGain.gain.value = muted ? 0 : 0.35;
-      masterGain.connect(audioCtx.destination);
-    } catch (e) {
-      audioCtx = null;
-    }
-  }
-
-  function tone(freq, duration, type, opts) {
-    if (!audioCtx || !masterGain) return;
-    opts = opts || {};
-    var t0 = audioCtx.currentTime;
-    var osc = audioCtx.createOscillator();
-    var gain = audioCtx.createGain();
-    osc.type = type || "sine";
-    osc.frequency.setValueAtTime(freq, t0);
-    if (opts.slideTo) osc.frequency.exponentialRampToValueAtTime(opts.slideTo, t0 + duration);
-    var vol = opts.volume != null ? opts.volume : 0.5;
-    gain.gain.setValueAtTime(0.0001, t0);
-    gain.gain.exponentialRampToValueAtTime(vol, t0 + Math.min(0.015, duration * 0.3));
-    gain.gain.exponentialRampToValueAtTime(0.0001, t0 + duration);
-    osc.connect(gain);
-    gain.connect(masterGain);
-    osc.start(t0);
-    osc.stop(t0 + duration + 0.02);
-  }
-
-  function noiseBurst(duration, volume) {
-    if (!audioCtx || !masterGain) return;
-    var t0 = audioCtx.currentTime;
-    var bufferSize = Math.max(1, Math.floor(audioCtx.sampleRate * duration));
-    var buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
-    var data = buffer.getChannelData(0);
-    for (var i = 0; i < bufferSize; i++) data[i] = (Math.random() * 2 - 1) * (1 - i / bufferSize);
-    var src = audioCtx.createBufferSource();
-    src.buffer = buffer;
-    var gain = audioCtx.createGain();
-    gain.gain.setValueAtTime(volume == null ? 0.2 : volume, t0);
-    gain.gain.exponentialRampToValueAtTime(0.0001, t0 + duration);
-    src.connect(gain);
-    gain.connect(masterGain);
-    src.start(t0);
-  }
-
+  function ensureAudio() { CA.unlock(); }
+  function sp(name) { var a = Array.prototype.slice.call(arguments, 1); return function () { var f = CA.sfx[name]; if (f) f.apply(null, a.length ? a : arguments); }; }
   var sfx = {
-    catchGrey: function () { tone(700, 0.08, "sine", { slideTo: 1000, volume: 0.45 }); },
-    catchBrown: function () {
-      tone(820, 0.09, "sine", { slideTo: 1200, volume: 0.45 });
-      setTimeout(function () { tone(1100, 0.08, "sine", { slideTo: 1500, volume: 0.35 }); }, 55);
-    },
-    catchGold: function () {
-      tone(900, 0.07, "triangle", { slideTo: 1300, volume: 0.4 });
-      setTimeout(function () { tone(1300, 0.07, "triangle", { slideTo: 1700, volume: 0.4 }); }, 60);
-      setTimeout(function () { tone(1700, 0.1, "triangle", { slideTo: 2200, volume: 0.4 }); }, 120);
-      setTimeout(function () { noiseBurst(0.08, 0.1); }, 120);
-    },
-    combo: function () { tone(500, 0.05, "square", { volume: 0.18 }); },
-    rankUp: function () { tone(600, 0.06, "sine", { slideTo: 900, volume: 0.22 }); },
-    click: function () { tone(500, 0.04, "sine", { slideTo: 650, volume: 0.3 }); },
-    endRun: function () { tone(500, 0.18, "sine", { slideTo: 300, volume: 0.35 }); },
+    catchGrey: function (m) { if (CA.sfx.catch) CA.sfx.catch("grey", m && m.beh); },
+    catchBrown: function (m) { if (CA.sfx.catch) CA.sfx.catch("brown", m && m.beh); },
+    catchGold: function (m) { if (CA.sfx.catch) CA.sfx.catch("gold", m && m.beh); },
+    combo: function () { if (CA.sfx.combo) CA.sfx.combo(combo); },
+    rankUp: sp("click"),
+    click: sp("click"),
+    endRun: sp("endRun")
   };
+  function skillSfx(phase) { if (ab && CA.sfx.skill) CA.sfx.skill(ab.skin, phase, ab.stage); }
 
   function toggleMute() {
     muted = !muted;
-    storageSet("catmouse_muted", muted ? "1" : "0");
-    if (masterGain) masterGain.gain.value = muted ? 0 : 0.35;
+    CA.set("master", !muted);
     updateMuteBtn();
   }
 
@@ -745,7 +687,8 @@
   // 恐慌波：受惊老鼠每 0.12 秒把恐慌传给 60 内的邻居，最多 4 层
   function startFlee(m, depth) {
     if (m.asleep || m.under) return;
-    if (m.state !== "flee") m.excl = 0.6;
+    if (m.state !== "flee") { m.excl = 0.6; if (CA.sfx.squeak && distance(m.x, m.y, cat.x, cat.y) < 300 * entityScaleMult) CA.sfx.squeak(); }
+    if (!depth && CA.sfx.panic && distance(m.x, m.y, cat.x, cat.y) < 400 * entityScaleMult) CA.sfx.panic();
     m.state = "flee"; m.awareBuffer = 0; m.panicIn = 0;
     if (m.beh === "timid" && !(m.trem > 0)) m.trem = 0.5;
     m.scatter = (Math.random() < 0.5 ? -1 : 1) * (0.45 + Math.random() * 0.85);
@@ -838,7 +781,7 @@
         var tv = normalize(cat.x - m.x, cat.y - m.y), cdot = (cat.vx * -tv.x + cat.vy * -tv.y) / Math.max(catSpeedNow, 1);
         if (dToCat < 90 * esm || (dToCat < 170 * esm && catSpeedNow > MOVE_SPEED * 0.6 && cdot > 0.8)) { m.dashT = 2.5; m.excl = 0.6; m.state = "flee"; fleeStep(m, 1.6, i); return finishStep(m, dt); }
         if (dToCat > 130 * esm) { m.vx = tv.x * m.speed * 0.5; m.vy = tv.y * m.speed * 0.5; }
-        else { m.vx = 0; m.vy = 0; m.taunt = true; m.facing = Math.atan2(tv.y, tv.x); }
+        else { if (!m.taunt && CA.sfx.taunt) CA.sfx.taunt(); m.vx = 0; m.vy = 0; m.taunt = true; m.facing = Math.atan2(tv.y, tv.x); }
         m.state = "wander";
         return finishStep(m, dt);
       }
@@ -942,12 +885,26 @@
     spawnCatchParticles(m.x, m.y);
     cat.squash = 1;
     startGulp(m);
-    if (m.type === "grey") sfx.catchGrey();
-    else if (m.type === "brown") sfx.catchBrown();
-    else sfx.catchGold();
+    if (m.type === "grey") sfx.catchGrey(m);
+    else if (m.type === "brown") sfx.catchBrown(m);
+    else sfx.catchGold(m);
     if (combo >= 3) sfx.combo();
 
     maybeSendHeartbeat(Date.now());
+    catchTimes.push(elapsedPlayTime); if (catchTimes.length > 20) catchTimes.shift();
+  }
+  var catchTimes = [];
+  // BGM 层次：开始页 0；局内 1；技能 Lv3+ 或连击 ≥5 → 2；3 秒内抓 ≥4 只或大招 → 3（audio.js 在小节线切换）
+  function updateMusic() {
+    var lvl = 0;
+    if (state === STATE_PLAY || state === STATE_PAUSE) {
+      lvl = 1;
+      if ((ab && ab.stage >= 3) || combo >= 5) lvl = 2;
+      var recent = 0; for (var i = 0; i < catchTimes.length; i++) if (elapsedPlayTime - catchTimes[i] < 3) recent++;
+      if (recent >= 4 || (ab && (ab.roll > 0 || ab.evoT > 0))) lvl = 3;
+    }
+    CA.setIntensity(lvl);
+    CA.setMuffle(state === STATE_PAUSE);
   }
 
   // =======================================================================
@@ -1084,10 +1041,10 @@
     aimPlanning = !ab.pend[key];
     var r = fire();
     aimPlanning = false;
-    if (r === "plan") { logPlan(key); ab.pend[key] = 1; ab.t[key] = AIM_TELEGRAPH; ab.plans++; return false; }
+    if (r === "plan") { skillSfx("windup"); logPlan(key); ab.pend[key] = 1; ab.t[key] = AIM_TELEGRAPH; ab.plans++; return false; }
     var was = ab.pend[key]; ab.pend[key] = 0;
-    if (r) { ab.t[key] = every; ab.hold[key] = 0; return true; }
-    if (was) ab.cancels++;
+    if (r) { skillSfx("fire"); ab.t[key] = every; ab.hold[key] = 0; return true; }
+    if (was) { ab.cancels++; skillSfx("cancel"); }
     ab.t[key] = 0.2; ab.hold[key] = (ab.hold[key] || 0) + 1; ab.holds++;
     return false;
   }
@@ -1107,7 +1064,7 @@
     arr.sort(function (a, b) { return a[0] - b[0]; });
     return arr.slice(0, n).map(function (a) { return a[1]; });
   }
-  function stunM(m, t, kind) { if (!m || m.hidden) return; m.stun = Math.max(m.stun || 0, t); m.stunKind = kind; m.state = "wander"; }
+  function stunM(m, t, kind) { if (!m || m.hidden) return; if (!(m.stun > 0)) skillSfx("hit"); m.stun = Math.max(m.stun || 0, t); m.stunKind = kind; m.state = "wander"; }
   function pullM(m, x, y, speed, t) { m.pullX = x; m.pullY = y; m.pullV = speed; m.pullT = t; }
   function fx(kind, x, y, life, extra) { if (ab.fx.length > 60) ab.fx.shift(); var f = { k: kind, x: x, y: y, age: 0, life: life }; for (var q in extra) f[q] = extra[q]; ab.fx.push(f); }
   function mouthPoint(dist) { return { x: cat.x + Math.cos(cat.facing) * dist, y: cat.y + Math.sin(cat.facing) * dist }; }
@@ -1134,7 +1091,7 @@
     showEvoBanner("技能进化：" + lv[1] + "！", k.evo);
     updateSkillBadge(true);
     fx("evo", cat.x, cat.y, 1.0, {});
-    if (sfx && sfx.rankUp) { try { sfx.rankUp(); setTimeout(sfx.rankUp, 120); } catch (e) { /* ignore */ } }
+    if (CA.sfx.evolve) CA.sfx.evolve();
   }
 
   function updateAbilities(dt) {
@@ -1443,13 +1400,13 @@
     if (ab.tornados.length === 0 && ab.straight >= 2 && !(ab.t.windCd > 0) && !(ab.t.windWait > 0)) {
       // 落点：前方 200 内鼠最多处（预判 0.4 秒），范围内不足 2 只就按住不放
       var p = aimBest("point", { maxR: 200 * esm, minR: 40 * esm, r: 70 * esm, lead: 0.4 });
-      if (p && p.hits >= 2 && !ab.tornPlan) { ab.tornPlan = { t: AIM_TELEGRAPH }; ab.plans++; logPlan("tornado"); aimFx({ x: p.x, y: p.y, r: 70 * esm, hits: p.hits, ic: "🌪", tele: AIM_TELEGRAPH }); }
+      if (p && p.hits >= 2 && !ab.tornPlan) { ab.tornPlan = { t: AIM_TELEGRAPH }; ab.plans++; logPlan("tornado"); skillSfx("windup"); aimFx({ x: p.x, y: p.y, r: 70 * esm, hits: p.hits, ic: "🌪", tele: AIM_TELEGRAPH }); }
       else if (ab.tornPlan && ab.tornPlan.t > 0) { /* 预告中 */ }
       else if (p && p.hits >= 2) {
         ab.tornPlan = null;
         ab.tornados.push({ x: p.x, y: p.y, t: 0, life: S >= 2 ? 4 : 3, r: 60, hops: 0, follow: S >= 2, followAt: 1.2, sucked: 0 }); abProc();
-        logAim("tornado", p.hits, p.n);
-      } else { if (ab.tornPlan) { ab.tornPlan = null; ab.cancels++; } ab.t.windWait = 0.2; ab.holds++; ab.hold.tornado = (ab.hold.tornado || 0) + 1; }
+        logAim("tornado", p.hits, p.n); skillSfx("fire");
+      } else { if (ab.tornPlan) { ab.tornPlan = null; ab.cancels++; skillSfx("cancel"); } ab.t.windWait = 0.2; ab.holds++; ab.hold.tornado = (ab.hold.tornado || 0) + 1; }
     }
     if (ab.t.windWait > 0) ab.t.windWait -= dt;
     if (ab.tornPlan) { ab.tornPlan.t -= dt; if (!(ab.straight >= 2) && ab.tornPlan.t <= -0.5) ab.tornPlan = null; }
@@ -1475,7 +1432,7 @@
       }
       if (S >= 3 && tw.sucked > 0 && tw.hops < 3 && !tw.hopTo && tw.t > 0.8) { // 连锁跳
         var nx = aimBest("point", { x: tw.x, y: tw.y, maxR: 260 * esm, minR: tw.r * esm, r: tw.r * esm, lead: 0.35, los: false, filt: function (q) { return !(q.stun > 0); } });
-        if (nx && !tw.hopPlan) { tw.hopPlan = tw.t; ab.plans++; logPlan("hop"); aimFx({ x: nx.x, y: nx.y, r: tw.r * esm, hits: nx.hits, ic: "↪️", tele: AIM_TELEGRAPH }); nx = null; }
+        if (nx && !tw.hopPlan) { tw.hopPlan = tw.t; ab.plans++; logPlan("hop"); skillSfx("windup"); aimFx({ x: nx.x, y: nx.y, r: tw.r * esm, hits: nx.hits, ic: "↪️", tele: AIM_TELEGRAPH }); nx = null; }
         else if (tw.hopPlan && tw.t - tw.hopPlan < AIM_TELEGRAPH) nx = null;
         else if (tw.hopPlan) { tw.hopPlan = 0; if (!nx) ab.cancels++; }
         if (nx) logAim("hop", nx.hits, nx.n);
@@ -2172,6 +2129,7 @@
   function drawTell(m, sx, sy, u, st, full, i) {
     var top = sy + (st[0] === "sit" ? -46 : -32) * u;
     if (m.type === "gold") {
+      if (full && CA.sfx.sparkle) CA.sfx.sparkle();
       emojiQuick("👑", sx, top - 2 * u, 29 * u);
       if (full) { var tw = (Math.sin(m.runCycle * 3 + i) + 1) / 2; ART.star(ctx, sx + 24 * u, top + 10 * u, (3 + tw * 3) * u * 1.4, "rgba(255,236,140," + (0.5 + tw * 0.5) + ")"); }
     }
@@ -2886,10 +2844,10 @@
     if (state !== STATE_PLAY) return;
     sfx.click();
     state = STATE_PAUSE; run.forceNext = true; abFromPlay = true; abPanelTab = null; moveDir.x = 0; moveDir.y = 0; activePointerId = null;
-    renderAbilityPanel(); showScreen(dom.abilityScreen);
+    renderAbilityPanel(); showScreen(dom.abilityScreen); if (CA.sfx.panel) CA.sfx.panel(true);
   }
   function closeAbilityPanel() {
-    hideScreen(dom.abilityScreen);
+    hideScreen(dom.abilityScreen); if (CA.sfx.panel) CA.sfx.panel(false);
     if (abFromPlay) {
       abFromPlay = false;
       if (state === STATE_PAUSE && dom.pauseScreen.classList.contains("hidden")) { state = STATE_PLAY; run.forceNext = true; }
@@ -2900,7 +2858,19 @@
   ["pointerdown", "touchstart", "mousedown"].forEach(function (ev) {
     dom.abilityBadge.addEventListener(ev, function (e) { e.stopPropagation(); }, { passive: true });
   });
-  dom.abilityCloseBtn.addEventListener("click", function () { sfx.click(); closeAbilityPanel(); });
+  dom.abilityCloseBtn.addEventListener("click", function () { closeAbilityPanel(); });
+  // 音频设置（暂停面板）：音乐/音效分开开关 + 音量，存 localStorage
+  (function () {
+    var S = CA.settings, q = function (id) { return document.getElementById(id); };
+    if (!q("bgmOn")) return;
+    q("bgmOn").checked = S.bgmOn !== false; q("sfxOn").checked = S.sfxOn !== false; q("bgmVol").value = S.bgmVol == null ? 60 : S.bgmVol; q("sfxVol").value = S.sfxVol == null ? 80 : S.sfxVol;
+    q("bgmOn").addEventListener("change", function () { CA.set("bgmOn", this.checked); });
+    q("sfxOn").addEventListener("change", function () { CA.set("sfxOn", this.checked); sfx.click(); });
+    q("bgmVol").addEventListener("input", function () { CA.set("bgmVol", +this.value); });
+    q("sfxVol").addEventListener("change", function () { CA.set("sfxVol", +this.value); sfx.click(); });
+  })();
+  // 第一次点按/按键时解锁音频（iOS 需要在用户手势里）
+  ["pointerdown", "touchend", "keydown"].forEach(function (ev) { document.addEventListener(ev, function () { ensureAudio(); }, { passive: true, capture: true }); });
 
   document.addEventListener("visibilitychange", function () {
     if (document.hidden && state === STATE_PLAY) enterPause();
@@ -2956,6 +2926,7 @@
   }
 
   function update(dt) {
+    updateMusic();
     if (state === STATE_PLAY) {
       elapsedPlayTime += dt;
       updateCat(dt);
@@ -3141,7 +3112,7 @@
 
   (function () { // 版本号
     var b = window.CAT_BUILD || {}, el = document.getElementById("buildTag");
-    if (el) el.textContent = (b.version || "v0.9-dev") + " · " + (b.sha || "local") + (b.date ? " · " + b.date : "");
+    if (el) { el.textContent = b.version || "dev"; if (b.sha) { var sm = document.createElement("small"); sm.textContent = " · " + b.sha; el.appendChild(sm); } }
   })();
   buildLbFilter();
   enterStart();
@@ -3171,6 +3142,7 @@
     get abilityPanelOpen() { return !dom.abilityScreen.classList.contains("hidden"); },
     get score() { return score; },
     get catches() { return catches; },
+    get audio() { return window.CatAudio ? window.CatAudio.debug() : null; },
     get combo() { return combo; },
     get chunkCount() { return chunkCache.size; },
     get rankText() { return dom.rankText.textContent; },

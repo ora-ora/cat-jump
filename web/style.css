@@ -478,3 +478,8 @@ html, body { background: #a8de8e; }
 /* 开始页给版本号留出底部一条，面板不会压到它 */
 #startScreen { padding-bottom: calc(max(8px, env(safe-area-inset-bottom)) + 26px); }
 #startScreen .build-tag { bottom: max(6px, env(safe-area-inset-bottom)); }
+
+.audio-set { display: grid; grid-template-columns: auto 1fr; gap: 6px 10px; align-items: center; margin-top: 12px; font-size: 14px; color: #6b4a35; text-align: left; }
+.audio-set input[type=range] { width: 100%; accent-color: #ff9a3d; }
+.audio-set input[type=checkbox] { accent-color: #ff9a3d; }
+.build-tag small { font-size: 10px; opacity: .7; }

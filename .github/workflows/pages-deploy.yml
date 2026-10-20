@@ -28,13 +28,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # 注入版本号：v0.9.<部署序号> · 短提交 · 构建日期（北京时间）；同时作为静态资源的缓存参数
+      # 注入版本号：部署时间（北京时间）v2026.10.21 01:45 · 短提交；短提交同时作为静态资源的缓存参数
       - name: Inject build version
         run: |
           SHA="${GITHUB_SHA::7}"
-          VER="v0.9.${GITHUB_RUN_NUMBER}"
-          DATE="$(TZ=Asia/Shanghai date +%Y-%m-%d)"
-          printf 'window.CAT_BUILD = { version: "%s", sha: "%s", date: "%s" };\n' "$VER" "$SHA" "$DATE" > web/version.js
+          VER="v$(TZ=Asia/Shanghai date '+%Y.%m.%d %H:%M')"
+          printf 'window.CAT_BUILD = { version: "%s", sha: "%s" };\n' "$VER" "$SHA" > web/version.js
           sed -i "s/__BUILD__/${SHA}/g" web/index.html
           cat web/version.js
           grep -c "?v=${SHA}" web/index.html
