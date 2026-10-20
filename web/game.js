@@ -2289,6 +2289,7 @@
       p_combo_max: comboMax,
       p_elapsed_seconds: elapsedPlayTime,
       p_ability_procs: ab ? ab.procs : 0,
+      p_uni_procs: uni ? uni.stats : null,
       p_client_ts: new Date().toISOString()
     };
   }
