@@ -3139,6 +3139,10 @@
   }
   requestAnimationFrame(frame);
 
+  (function () { // 版本号
+    var b = window.CAT_BUILD || {}, el = document.getElementById("buildTag");
+    if (el) el.textContent = (b.version || "v0.9-dev") + " · " + (b.sha || "local") + (b.date ? " · " + b.date : "");
+  })();
   buildLbFilter();
   enterStart();
 

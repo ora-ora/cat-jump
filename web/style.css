@@ -471,3 +471,7 @@ html, body { background: #a8de8e; }
 .ab-st.lock { background: #eee; opacity: .55; }
 .ab-st .bar { height: 6px; background: #d8d0c8; border-radius: 3px; margin-top: 4px; overflow: hidden; }
 .ab-st .bar i { display: block; height: 100%; background: #ff9a3d; }
+
+/* 版本号（开始页右下角，避开安全区） */
+.build-tag { position: absolute; right: max(10px, env(safe-area-inset-right)); bottom: max(8px, env(safe-area-inset-bottom)); z-index: 2;
+  font-size: 11px; color: #a0764f; background: rgba(255,255,255,.75); border: 2px solid #ffd9b8; border-radius: 10px; padding: 2px 8px; pointer-events: none; letter-spacing: .3px; }

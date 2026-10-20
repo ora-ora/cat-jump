@@ -6,7 +6,7 @@
 <meta name="theme-color" content="#a8de8e">
 <title>小猫抓老鼠 Cat Mouse Chase</title>
 <link rel="icon" href="data:,">
-<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="style.css?v=__BUILD__">
 </head>
 <body>
 <div id="app">
@@ -29,6 +29,7 @@
   <div id="evoBanner" class="evo-banner hidden" aria-live="polite"></div>
 
   <div id="startScreen" class="overlay">
+    <div id="buildTag" class="build-tag" aria-label="版本号"></div>
     <div class="panel start-panel">
       <h1>小猫抓老鼠</h1>
       <canvas id="skinPreview" class="skin-preview" width="160" height="150" aria-hidden="true"></canvas>
@@ -110,8 +111,9 @@
     </div>
   </div>
 </div>
-<script src="art.js"></script>
-<script src="anim.js"></script>
-<script src="game.js"></script>
+<script src="version.js?v=__BUILD__"></script>
+<script src="art.js?v=__BUILD__"></script>
+<script src="anim.js?v=__BUILD__"></script>
+<script src="game.js?v=__BUILD__"></script>
 </body>
 </html>
