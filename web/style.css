@@ -362,9 +362,9 @@ html, body { background: #a8de8e; }
 .panel h1 { font-size: 30px; color: #ff8a3d; text-shadow: 0 2px 0 #fff, 0 3px 0 #ffd9b8; letter-spacing: 1px; }
 .panel h2 { color: #ff8a3d; }
 .start-panel { padding: 18px 18px 16px; }
-.skin-preview { width: 128px; height: 120px; display: block; margin: 2px auto 0; }
+.skin-preview { width: 94px; height: 84px; display: block; margin: 2px auto 0; }
 .skin-name { font-size: 19px; font-weight: 800; color: #7a4a2a; }
-.skin-desc { font-size: 12px; color: #b08a6a; margin-bottom: 8px; }
+.skin-desc { font-size: 12px; color: #b08a6a; margin-bottom: 4px; }
 .section-title { text-align: left; font-size: 14px; font-weight: 800; color: #7a4a2a; margin: 4px 2px 6px; }
 .skin-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
 .skin-card { position: relative; border: 2px solid #ece6df; background: #f7f5f2; border-radius: 16px; padding: 4px 0 4px; cursor: pointer; font: inherit; color: #7a4a2a; font-size: 13px; font-weight: 700; }
@@ -406,3 +406,14 @@ html, body { background: #a8de8e; }
 .lb-row.me { background: #fff1e2; border-radius: 12px; border-bottom-color: transparent; box-shadow: inset 0 0 0 2px #ff9d4d; }
 .lb-row.me .lb-name { font-weight: 900; color: #e0602a; }
 .lb-me-tag { font-size: 11px; font-weight: 800; background: #ff9d4d; color: #fff; border-radius: 999px; padding: 1px 7px; margin-right: 6px; flex-shrink: 0; }
+
+/* ---- 被动能力 ---- */
+.ability-badge { display: inline-flex; align-items: center; gap: 4px; pointer-events: none; transition: transform .15s; }
+.ability-badge .ab-ic { font-size: 1.1em; }
+.ability-badge.flash { transform: scale(1.12); background: #fff3c4; box-shadow: 0 0 0 3px #ffd84a; }
+.skin-ability { margin: 0 auto 2px; max-width: 300px; padding: 3px 10px; border-radius: 14px; background: #fff3e2; border: 2px dashed #ffc58f; font-size: 12px; color: #7a4a2a; line-height: 1.28; }
+.skin-ability b { display: block; font-size: 14px; color: #e07a33; }
+.lb-filter { display: flex; gap: 4px; justify-content: center; flex-wrap: wrap; margin: 4px 0 8px; }
+.lb-chip { border: 2px solid #ffd2a8; background: #fff; border-radius: 999px; height: 30px; min-width: 30px; padding: 0 3px; font-weight: 700; color: #7a4a2a; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; }
+.lb-chip img { width: 22px; height: 22px; }
+.lb-chip.on { background: #ff9d4d; border-color: #ff9d4d; color: #fff; }

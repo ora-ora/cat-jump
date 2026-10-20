@@ -722,6 +722,7 @@
         }
       }
 
+      applyAbilityToMouse(m, dt);
       m.x += m.vx * dt;
       m.y += m.vy * dt;
 
@@ -760,6 +761,306 @@
     if (combo >= 3) sfx.combo();
 
     maybeSendHeartbeat(Date.now());
+  }
+
+  // =======================================================================
+  // 被动能力（每款皮肤一个；全部由场景/动作触发，不看抓捕数、不看坐姿）
+  // 数值为初版设计值，尚未做平衡调参。
+  // =======================================================================
+
+  var ABILITIES = {
+    orange:  { id: "paw",    icon: "🐾", name: "梅花脚印",   desc: "跑过留下发光脚印，老鼠踩到会打滑转圈" },
+    black:   { id: "shadow", icon: "👥", name: "影子双胞胎", desc: "影子猫 1 秒后模仿你的路线，把老鼠赶向你" },
+    white:   { id: "yarn",   icon: "🧶", name: "毛线团跟班", desc: "毛线球滚在身后，碰到的老鼠被缠住" },
+    calico:  { id: "tail",   icon: "🌀", name: "尾巴扫扫",   desc: "急转弯时尾巴一甩，把身边老鼠扫到嘴边" },
+    blue:    { id: "wind",   icon: "🍃", name: "落叶风",     desc: "直线快跑 2 秒卷起风，把两侧老鼠吹到路线上" },
+    siamese: { id: "sneeze", icon: "🤧", name: "喷嚏惊魂",   desc: "时不时打喷嚏，把附近老鼠吓得挤成一团" }
+  };
+  function abilityOf(skin) { return ABILITIES[skin] || ABILITIES.orange; }
+
+  var AB_PRINT_EVERY = 0.15, AB_PRINT_LIFE = 4, AB_PRINT_MAX = 32, AB_SLIP_T = 0.6, AB_SLIP_CD = 2;
+  var AB_SHADOW_DELAY = 1.0, AB_SHADOW_R = 100, AB_SHADOW_PUSH = 55;
+  var AB_YARN_DELAY = 0.45, AB_YARN_R = 11, AB_TANGLE_T = 1.2, AB_TANGLE_CD = 5;
+  var AB_TAIL_TURN = Math.PI / 2, AB_TAIL_R = 70, AB_TAIL_CD = 0.6, AB_TAIL_PULL = 30;
+  var AB_WIND_HOLD = 2, AB_WIND_SIDE = 150, AB_WIND_PUSH = 45;
+  var AB_SNEEZE_MIN = 15, AB_SNEEZE_MAX = 25, AB_SNEEZE_R = 200, AB_SNEEZE_STUN = 0.5;
+
+  var ab = null;
+  function resetAbilities() {
+    var rng = mulberry32((worldSeed ^ 0x5eed1234) >>> 0);
+    ab = {
+      kind: abilityOf(currentSkin).id, procs: 0, flash: 0,
+      hist: [], prints: [], printT: 0,
+      shadow: { on: false, x: 0, y: 0, anim: newAnim(), cycle: 0 },
+      yarn: { x: cat.x, y: cat.y, rot: 0 },
+      tail: { last: cat.facing, acc: 0, cd: 0, swish: 0, dir: 0 },
+      wind: { dir: cat.facing, hold: 0, on: false, leaves: [], leafT: 0 },
+      sneeze: { rng: rng, next: AB_SNEEZE_MIN + rng() * (AB_SNEEZE_MAX - AB_SNEEZE_MIN), t: 0, anim: 0, x: 0, y: 0 }
+    };
+  }
+  function abProc() { ab.procs++; ab.flash = 0.6; }
+  function histAt(delay) {
+    var tt = elapsedPlayTime - delay, h = ab.hist;
+    if (!h.length) return { x: cat.x, y: cat.y, a: cat.facing, v: 0 };
+    for (var i = h.length - 1; i >= 0; i--) if (h[i].t <= tt) return h[i];
+    return h[0];
+  }
+  function angDiff(a, b) { var d = a - b; while (d > Math.PI) d -= Math.PI * 2; while (d < -Math.PI) d += Math.PI * 2; return d; }
+
+  function updateAbilities(dt) {
+    if (!ab) resetAbilities();
+    var esm = entityScaleMult;
+    var speed = Math.sqrt(cat.vx * cat.vx + cat.vy * cat.vy);
+    var moving = speed > MOVE_SPEED * 0.5;
+    ab.flash = Math.max(0, ab.flash - dt);
+    ab.hist.push({ t: elapsedPlayTime, x: cat.x, y: cat.y, a: cat.facing, v: speed });
+    while (ab.hist.length > 2 && ab.hist[0].t < elapsedPlayTime - 1.3) ab.hist.shift();
+    var i, m, d;
+
+    if (ab.kind === "paw") {
+      ab.printT -= dt;
+      if (moving && ab.printT <= 0) {
+        ab.printT = AB_PRINT_EVERY;
+        var side = (ab.prints.length % 2) ? 1 : -1;
+        ab.prints.push({ x: cat.x - Math.sin(cat.facing) * side * 5 * esm, y: cat.y + Math.cos(cat.facing) * side * 5 * esm + cat.r * 0.6, a: cat.facing, age: 0 });
+        if (ab.prints.length > AB_PRINT_MAX) ab.prints.shift();
+      }
+      for (i = ab.prints.length - 1; i >= 0; i--) { ab.prints[i].age += dt; if (ab.prints[i].age > AB_PRINT_LIFE) ab.prints.splice(i, 1); }
+      for (i = 0; i < mice.length; i++) {
+        m = mice[i];
+        if ((m.slip || 0) > 0 || (m.slipCd || 0) > 0) continue;
+        for (var k = 0; k < ab.prints.length; k++) {
+          var p = ab.prints[k];
+          if (p.age < 0.25) continue; // 刚落下的脚印不算，避免猫脚下直接触发
+          if (distance(m.x, m.y, p.x, p.y - cat.r * 0.6 + m.r * 0.6) < (9 * esm + m.r * 0.6)) {
+            m.slip = AB_SLIP_T; m.slipCd = AB_SLIP_CD; m.slipA = m.facing; abProc(); break;
+          }
+        }
+      }
+    } else if (ab.kind === "shadow") {
+      var sh = ab.shadow, hs = histAt(AB_SHADOW_DELAY);
+      sh.on = elapsedPlayTime > AB_SHADOW_DELAY;
+      var smv = Math.sqrt((hs.x - sh.x) * (hs.x - sh.x) + (hs.y - sh.y) * (hs.y - sh.y)) / Math.max(dt, 1e-3);
+      sh.x = hs.x; sh.y = hs.y;
+      stepAnim(sh.anim, dt, hs.v > RUN_SPEED_CAT, hs.a);
+      sh.cycle += dt * (smv / 24 + 0.3);
+      if (sh.on && distance(sh.x, sh.y, cat.x, cat.y) > cat.r * 2) {
+        for (i = 0; i < mice.length; i++) {
+          m = mice[i];
+          d = distance(m.x, m.y, sh.x, sh.y);
+          if (d > AB_SHADOW_R * esm * 1.3) m.herded = false;
+          if (d > AB_SHADOW_R * esm) continue;
+          var aw = normalize(m.x - sh.x, m.y - sh.y), tc = normalize(cat.x - m.x, cat.y - m.y);
+          var hv = normalize(aw.x * 0.5 + tc.x, aw.y * 0.5 + tc.y);
+          m.pushX = (m.pushX || 0) + hv.x * AB_SHADOW_PUSH * esm;
+          m.pushY = (m.pushY || 0) + hv.y * AB_SHADOW_PUSH * esm;
+          if (!m.herded) { m.herded = true; abProc(); }
+        }
+      }
+    } else if (ab.kind === "yarn") {
+      var y = ab.yarn, hy = histAt(AB_YARN_DELAY);
+      var nx = y.x + (hy.x - y.x) * (1 - Math.exp(-dt * 8)), ny = y.y + (hy.y - y.y) * (1 - Math.exp(-dt * 8));
+      y.rot += Math.sqrt((nx - y.x) * (nx - y.x) + (ny - y.y) * (ny - y.y)) / (AB_YARN_R * esm);
+      y.x = nx; y.y = ny;
+      for (i = 0; i < mice.length; i++) {
+        m = mice[i];
+        if ((m.tangle || 0) > 0 || (m.tangleCd || 0) > 0) continue;
+        if (distance(m.x, m.y, y.x, y.y) < AB_YARN_R * esm + m.r) { m.tangle = AB_TANGLE_T; m.tangleCd = AB_TANGLE_CD; abProc(); }
+      }
+    } else if (ab.kind === "tail") {
+      var tl = ab.tail;
+      tl.cd = Math.max(0, tl.cd - dt); tl.swish = Math.max(0, tl.swish - dt);
+      if (speed > 4) tl.acc += Math.abs(angDiff(cat.facing, tl.last));
+      tl.last = cat.facing;
+      tl.acc *= Math.exp(-dt * 3);
+      if (tl.acc > AB_TAIL_TURN && tl.cd <= 0) {
+        tl.acc = 0; tl.cd = AB_TAIL_CD; tl.swish = 0.35; tl.dir = cat.facing;
+        var fx = cat.x + Math.cos(cat.facing) * cat.r * 1.2, fy = cat.y + Math.sin(cat.facing) * cat.r * 1.2;
+        var hit = false;
+        for (i = 0; i < mice.length; i++) {
+          m = mice[i];
+          if (distance(m.x, m.y, cat.x, cat.y) > AB_TAIL_R * esm) continue;
+          var tv = normalize(fx - m.x, fy - m.y);
+          m.sweepT = 0.2; m.sweepX = tv.x * AB_TAIL_PULL * esm / 0.2; m.sweepY = tv.y * AB_TAIL_PULL * esm / 0.2;
+          hit = true;
+        }
+        if (hit) abProc();
+      }
+    } else if (ab.kind === "wind") {
+      var w = ab.wind;
+      if (moving && Math.abs(angDiff(cat.facing, w.dir)) < 0.25) w.hold += dt;
+      else { w.hold = 0; w.dir = cat.facing; }
+      var wasOn = w.on;
+      w.on = moving && w.hold >= AB_WIND_HOLD;
+      if (w.on && !wasOn) abProc();
+      var cf = Math.cos(cat.facing), sf = Math.sin(cat.facing);
+      if (w.on) {
+        for (i = 0; i < mice.length; i++) {
+          m = mice[i];
+          var rx = m.x - cat.x, ry = m.y - cat.y;
+          var along = rx * cf + ry * sf, lat = -rx * sf + ry * cf;
+          if (along < -60 * esm || along > 240 * esm || Math.abs(lat) < cat.r || Math.abs(lat) > AB_WIND_SIDE * esm) continue;
+          var sg = lat > 0 ? -1 : 1;
+          m.pushX = (m.pushX || 0) + (-sf) * sg * AB_WIND_PUSH * esm;
+          m.pushY = (m.pushY || 0) + (cf) * sg * AB_WIND_PUSH * esm;
+        }
+        w.leafT -= dt;
+        if (w.leafT <= 0 && w.leaves.length < 24) {
+          w.leafT = 0.08;
+          var sgn = Math.random() < 0.5 ? -1 : 1, off = (40 + Math.random() * 100) * esm;
+          w.leaves.push({ x: cat.x - sf * sgn * off + cf * (Math.random() * 160 - 20) * esm, y: cat.y + cf * sgn * off + sf * (Math.random() * 160 - 20) * esm,
+            vx: sf * sgn * 50 + cf * 30, vy: -cf * sgn * 50 + sf * 30, rot: Math.random() * 6, age: 0, life: 0.9, c: Math.random() < 0.5 ? "#8fd16a" : "#f2b84b" });
+        }
+      }
+      for (i = w.leaves.length - 1; i >= 0; i--) {
+        var lf = w.leaves[i];
+        lf.age += dt; lf.x += lf.vx * dt; lf.y += lf.vy * dt; lf.rot += dt * 8;
+        if (lf.age > lf.life) w.leaves.splice(i, 1);
+      }
+    } else if (ab.kind === "sneeze") {
+      var sz = ab.sneeze;
+      sz.t += dt; sz.anim = Math.max(0, sz.anim - dt);
+      if (sz.t >= sz.next) {
+        sz.t = 0; sz.next = AB_SNEEZE_MIN + sz.rng() * (AB_SNEEZE_MAX - AB_SNEEZE_MIN); sz.anim = 0.9;
+        sz.x = cat.x; sz.y = cat.y;
+        var near = [], cx = 0, cy = 0;
+        for (i = 0; i < mice.length; i++) if (distance(mice[i].x, mice[i].y, cat.x, cat.y) < AB_SNEEZE_R * esm) { near.push(mice[i]); cx += mice[i].x; cy += mice[i].y; }
+        if (near.length) {
+          cx /= near.length; cy /= near.length;
+          for (i = 0; i < near.length; i++) { near[i].stun = AB_SNEEZE_STUN; near[i].clusterX = cx; near[i].clusterY = cy; }
+        }
+        abProc();
+      }
+    }
+  }
+
+  // 在 updateMice 里、位移之前调用：叠加能力对老鼠的影响
+  function applyAbilityToMouse(m, dt) {
+    if (m.slipCd > 0) m.slipCd -= dt;
+    if (m.tangleCd > 0) m.tangleCd -= dt;
+    if (m.tangle > 0) { m.tangle -= dt; m.vx = 0; m.vy = 0; }
+    else if (m.stun > 0) {
+      m.stun -= dt;
+      var dc = distance(m.x, m.y, m.clusterX, m.clusterY);
+      if (dc > 6) { var cv = normalize(m.clusterX - m.x, m.clusterY - m.y); m.vx = cv.x * m.speed * 0.8; m.vy = cv.y * m.speed * 0.8; }
+      else { m.vx = 0; m.vy = 0; }
+    } else if (m.slip > 0) {
+      m.slip -= dt;
+      m.slipA = (m.slipA || 0) + dt * 16;
+      m.vx = Math.cos(m.slipA) * m.speed * 0.25; m.vy = Math.sin(m.slipA) * m.speed * 0.25;
+    }
+    if (m.sweepT > 0) { m.sweepT -= dt; m.vx += m.sweepX; m.vy += m.sweepY; }
+    if (m.pushX || m.pushY) { m.vx += m.pushX; m.vy += m.pushY; }
+    m.pushX = 0; m.pushY = 0;
+  }
+
+  // ---- 能力画面 ----
+  function drawPaw(x, y, a, sc, alpha) {
+    ctx.save(); ctx.translate(x, y); ctx.rotate(a + Math.PI / 2); ctx.globalAlpha = alpha;
+    ctx.fillStyle = "#ff8fb1"; ctx.shadowColor = "#ffd1e0"; ctx.shadowBlur = 6 * sc;
+    ctx.beginPath(); ctx.ellipse(0, 2 * sc, 4.2 * sc, 3.6 * sc, 0, 0, Math.PI * 2); ctx.fill();
+    for (var t = 0; t < 4; t++) { ctx.beginPath(); ctx.arc((t - 1.5) * 2.8 * sc, (-3.2 - (t === 1 || t === 2 ? 1.2 : 0)) * sc, 1.5 * sc, 0, Math.PI * 2); ctx.fill(); }
+    ctx.restore();
+  }
+  function drawAbilityGround() {
+    if (!ab) return;
+    var sc = s(1) * entityScaleMult, i;
+    if (ab.kind === "paw") {
+      for (i = 0; i < ab.prints.length; i++) {
+        var p = ab.prints[i], al = Math.min(1, p.age / 0.15) * (1 - Math.max(0, p.age - AB_PRINT_LIFE + 1));
+        drawPaw(worldToScreenX(p.x), worldToScreenY(p.y), p.a, sc, 0.75 * al);
+      }
+    } else if (ab.kind === "yarn") {
+      var yx = worldToScreenX(ab.yarn.x), yy = worldToScreenY(ab.yarn.y);
+      var cx = worldToScreenX(cat.x), cy = worldToScreenY(cat.y) + s(cat.r) * 0.6;
+      ctx.strokeStyle = "#ff8fb1"; ctx.lineWidth = Math.max(1.5, 1.6 * sc); ctx.beginPath();
+      ctx.moveTo(cx, cy); ctx.quadraticCurveTo((cx + yx) / 2, Math.max(cy, yy) + 14 * sc, yx, yy + 4 * sc); ctx.stroke();
+    } else if (ab.kind === "sneeze" && ab.sneeze.anim > 0) {
+      var k = 1 - ab.sneeze.anim / 0.9;
+      ctx.strokeStyle = "rgba(255,255,255," + (0.8 * (1 - k)) + ")"; ctx.lineWidth = 4 * sc;
+      ctx.beginPath(); ctx.arc(worldToScreenX(ab.sneeze.x), worldToScreenY(ab.sneeze.y), s(AB_SNEEZE_R * entityScaleMult) * Math.min(1, k * 1.6), 0, Math.PI * 2); ctx.stroke();
+    }
+  }
+  function drawAbilityBehindCat() {
+    if (!ab) return;
+    if (ab.kind === "shadow" && ab.shadow.on) {
+      var sh = ab.shadow;
+      var shx = worldToScreenX(sh.x), shy = worldToScreenY(sh.y), shr = s(cat.r);
+      ctx.fillStyle = "rgba(150,90,220,.28)"; ctx.beginPath(); ctx.ellipse(shx, shy + shr * 1.2, shr * 1.6, shr * 0.5, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.save(); ctx.globalAlpha = 0.45;
+      drawCatAt(worldToScreenX(sh.x), worldToScreenY(sh.y), s(cat.r), sh.anim, sh.cycle, "black", true);
+      ctx.restore();
+      ctx.globalAlpha = 1;
+    } else if (ab.kind === "yarn") {
+      var sc = s(1) * entityScaleMult, r = AB_YARN_R * sc;
+      var x = worldToScreenX(ab.yarn.x), y = worldToScreenY(ab.yarn.y);
+      shadow(x, y + r * 0.95, r * 0.95);
+      ctx.save(); ctx.translate(x, y);
+      ctx.fillStyle = "#ff9fc0"; ctx.strokeStyle = "#e0668f"; ctx.lineWidth = Math.max(1.5, 1.8 * sc);
+      ctx.beginPath(); ctx.arc(0, 0, r, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+      ctx.save(); ctx.beginPath(); ctx.arc(0, 0, r, 0, Math.PI * 2); ctx.clip(); ctx.rotate(ab.yarn.rot);
+      for (var j = -2; j <= 2; j++) { ctx.beginPath(); ctx.ellipse(j * r * 0.38, 0, r * 0.25, r * 1.1, 0.5, 0, Math.PI * 2); ctx.stroke(); }
+      ctx.restore();
+      ctx.fillStyle = "rgba(255,255,255,.55)"; ctx.beginPath(); ctx.arc(-r * 0.35, -r * 0.4, r * 0.25, 0, Math.PI * 2); ctx.fill();
+      ctx.restore();
+    }
+  }
+  function drawAbilityOverlay() {
+    if (!ab) return;
+    var sc = s(1) * entityScaleMult, i, m, cx = worldToScreenX(cat.x), cy = worldToScreenY(cat.y);
+    // 老鼠身上的状态
+    for (i = 0; i < mice.length; i++) {
+      m = mice[i];
+      var mx = worldToScreenX(m.x), my = worldToScreenY(m.y);
+      if (mx < -60 || mx > W + 60 || my < -60 || my > H + 60) continue;
+      if (m.slip > 0) {
+        for (var q = 0; q < 3; q++) { var aa = elapsedPlayTime * 8 + q * 2.1; ART.star(ctx, mx + Math.cos(aa) * 12 * sc, my - 26 * sc + Math.sin(aa) * 4 * sc, 4 * sc, "#ffd84a"); }
+      }
+      if (m.tangle > 0) {
+        ctx.strokeStyle = "#ff8fb1"; ctx.lineWidth = Math.max(1.5, 2 * sc);
+        for (var z = 0; z < 3; z++) { ctx.beginPath(); ctx.ellipse(mx, my - 2 * sc + z * 5 * sc, m.r * s(1) * 1.1, 4 * sc, 0.3 * (z - 1), 0, Math.PI * 2); ctx.stroke(); }
+      }
+      if (m.stun > 0) {
+        ctx.font = "900 " + Math.round(16 * sc) + "px sans-serif"; ctx.textAlign = "center";
+        ctx.lineWidth = 3; ctx.strokeStyle = "#fff"; ctx.strokeText("!", mx, my - 26 * sc); ctx.fillStyle = "#ff5a5a"; ctx.fillText("!", mx, my - 26 * sc);
+      }
+    }
+    if (ab.kind === "tail" && ab.tail.swish > 0) {
+      var k = 1 - ab.tail.swish / 0.35, R = s(AB_TAIL_R * entityScaleMult) * 0.8, back = ab.tail.dir + Math.PI;
+      ctx.strokeStyle = "rgba(255,190,120," + (0.85 * (1 - k)) + ")"; ctx.lineWidth = 7 * sc; ctx.lineCap = "round";
+      ctx.beginPath(); ctx.arc(cx, cy, R, back - 1.6 + k * 1.2, back + 0.4 + k * 1.2); ctx.stroke();
+      ctx.lineWidth = 3 * sc; ctx.strokeStyle = "rgba(255,255,255," + (0.7 * (1 - k)) + ")";
+      ctx.beginPath(); ctx.arc(cx, cy, R * 0.82, back - 1.2 + k * 1.2, back + 0.2 + k * 1.2); ctx.stroke();
+    } else if (ab.kind === "wind") {
+      var w = ab.wind;
+      for (i = 0; i < w.leaves.length; i++) {
+        var lf = w.leaves[i];
+        ctx.save(); ctx.translate(worldToScreenX(lf.x), worldToScreenY(lf.y)); ctx.rotate(lf.rot);
+        ctx.globalAlpha = 1 - lf.age / lf.life; ctx.fillStyle = lf.c;
+        ctx.beginPath(); ctx.ellipse(0, 0, 6 * sc, 3 * sc, 0, 0, Math.PI * 2); ctx.fill();
+        ctx.strokeStyle = "rgba(80,120,40,.6)"; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(-5 * sc, 0); ctx.lineTo(5 * sc, 0); ctx.stroke();
+        ctx.restore();
+      }
+      if (w.on) {
+        ctx.strokeStyle = "rgba(255,255,255,.55)"; ctx.lineWidth = 2.5 * sc; ctx.lineCap = "round";
+        var f = cat.facing, ph = (elapsedPlayTime * 3) % 1;
+        for (var sd = -1; sd <= 1; sd += 2) for (var n = 0; n < 2; n++) {
+          var off = (55 + n * 40) * sc * sd, al = 40 * sc, st = (ph + n * 0.5) % 1 * 80 * sc;
+          var bx = cx - Math.sin(f) * off + Math.cos(f) * (st - 20 * sc), by = cy + Math.cos(f) * off + Math.sin(f) * (st - 20 * sc);
+          ctx.beginPath(); ctx.moveTo(bx, by); ctx.quadraticCurveTo(bx + Math.cos(f) * al * 0.5 + Math.sin(f) * sd * 8 * sc, by + Math.sin(f) * al * 0.5 - Math.cos(f) * sd * 8 * sc, bx + Math.cos(f) * al, by + Math.sin(f) * al); ctx.stroke();
+        }
+      }
+    } else if (ab.kind === "sneeze" && ab.sneeze.anim > 0) {
+      var t2 = ab.sneeze.anim, pop = t2 > 0.75 ? (0.9 - t2) / 0.15 : 1;
+      ctx.globalAlpha = Math.min(1, t2 / 0.3);
+      var bx2 = cx + 26 * sc, by2 = cy - 52 * sc;
+      ctx.fillStyle = "#fff"; ctx.strokeStyle = "#8fc8ff"; ctx.lineWidth = 2.5 * sc;
+      ctx.beginPath(); ctx.ellipse(bx2, by2, 30 * sc * pop, 15 * sc * pop, 0, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+      ctx.font = "900 " + Math.round(14 * sc * pop) + "px sans-serif"; ctx.textAlign = "center"; ctx.fillStyle = "#4a8fd8";
+      ctx.fillText("哈啾!", bx2, by2 + 5 * sc * pop);
+      for (i = 0; i < 5; i++) { ctx.fillStyle = "rgba(200,230,255,.8)"; ctx.beginPath(); ctx.arc(cx + Math.cos(i * 1.3) * (1 - t2) * 60 * sc, cy - 10 * sc + Math.sin(i * 1.3) * (1 - t2) * 40 * sc, 3 * sc, 0, Math.PI * 2); ctx.fill(); }
+      ctx.globalAlpha = 1;
+    }
   }
 
   // =======================================================================
@@ -1021,6 +1322,7 @@
     if (gulp) { gulp.t += dt; if (gulp.t >= GULP_T) gulp = null; }
   }
 
+  function gulpState() { return gulp; }
   function startGulp(m) {
     gulp = { t: 0, dir: catAnim.dir, type: m.type };
   }
@@ -1071,8 +1373,9 @@
     ctx.globalAlpha = 1;
   }
 
-  function drawCatAt(x, y, r, a, runCycle, skin) {
+  function drawCatAt(x, y, r, a, runCycle, skin, ghost) {
     var u = r * CAT_UNIT_PER_R;
+    var gulp = ghost ? null : gulpState();
     var dirInfo = ANIM.DIR8[gulp ? gulp.dir : a.dir];
     var view = dirInfo[0], flip = dirInfo[1];
     var st;
@@ -1081,9 +1384,9 @@
     var sitting = st[0] === "sit" && a.mode === "sit";
     var breathe = sitting ? Math.sin((a.t + a.phase) * 2.4) * 0.03 : 0;
     shadow(x, y + 46 * u, (st[0] === "run" ? 30 : 26) * u);
-    drawGulpMouse(x, y, u, view, flip, true);
+    if (!ghost) drawGulpMouse(x, y, u, view, flip, true);
     blit(ANIM.catSprite(skin, view, st[0], st[1], spritePx(u)), x, y, u, flip, 1 - breathe * 0.5, 1 + breathe, 46);
-    drawGulpMouse(x, y, u, view, flip, false);
+    if (!ghost) drawGulpMouse(x, y, u, view, flip, false);
   }
 
   function drawCat() {
@@ -1241,6 +1544,7 @@
       p_catches_gold: catchesGold,
       p_combo_max: comboMax,
       p_elapsed_seconds: elapsedPlayTime,
+      p_ability_procs: ab ? ab.procs : 0,
       p_client_ts: new Date().toISOString()
     };
   }
@@ -1485,16 +1789,33 @@
     return cleaned;
   }
 
+  var lbSkinFilter = "";
+  function buildLbFilter() {
+    var html = '<button type="button" class="lb-chip on" data-skin="">全部</button>';
+    window.CatArt.SKINS.forEach(function (k) {
+      html += '<button type="button" class="lb-chip" data-skin="' + k.id + '" aria-label="' + k.name + '"><img alt="" src="' + window.CatArt.avatarDataUrl(k.id) + '"></button>';
+    });
+    dom.lbFilter.innerHTML = html;
+    dom.lbFilter.addEventListener("click", function (e) {
+      var b = e.target.closest ? e.target.closest(".lb-chip") : null;
+      if (!b) return;
+      lbSkinFilter = b.dataset.skin;
+      var chips = dom.lbFilter.querySelectorAll(".lb-chip");
+      for (var i = 0; i < chips.length; i++) chips[i].classList.toggle("on", chips[i] === b);
+      sfx.click();
+      loadTopScores();
+    });
+  }
   function loadTopScores() {
     dom.leaderboardList.innerHTML = '<div class="lb-loading">加载中…</div>';
     if (!backendConfigured) {
       dom.leaderboardList.innerHTML = '<div class="lb-error">排行榜未配置</div>';
       return;
     }
-    restGet("/rest/v1/leaderboard_live?select=nickname,display_score,is_live,is_paused,skin,rank,live_run_id&order=rank.asc&limit=" + LEADERBOARD_TOPN_LIMIT)
+    restGet("/rest/v1/leaderboard_live?select=nickname,display_score,is_live,is_paused,skin,rank,live_run_id" + (lbSkinFilter ? "&skin=eq." + lbSkinFilter : "") + "&order=rank.asc&limit=" + LEADERBOARD_TOPN_LIMIT)
       .then(function (res) {
         if (!res.ok) { dom.leaderboardList.innerHTML = '<div class="lb-error">暂时无法连接排行榜</div>'; return; }
-        if (res.rows.length === 0) { dom.leaderboardList.innerHTML = '<div class="lb-empty">还没有人上榜，来当第一个吧！</div>'; return; }
+        if (res.rows.length === 0) { dom.leaderboardList.innerHTML = '<div class="lb-empty">' + (lbSkinFilter ? '这款小猫还没有人上榜' : '还没有人上榜，来当第一个吧！') + '</div>'; return; }
         var html = "";
         for (var i = 0; i < res.rows.length; i++) {
           var row = res.rows[i];
@@ -1553,7 +1874,9 @@
     homeBtn: document.getElementById("homeBtn"),
     leaderboardScreen: document.getElementById("leaderboardScreen"),
     leaderboardList: document.getElementById("leaderboardList"),
-    leaderboardCloseBtn: document.getElementById("leaderboardCloseBtn")
+    leaderboardCloseBtn: document.getElementById("leaderboardCloseBtn"),
+    abilityBadge: document.getElementById("abilityBadge"),
+    lbFilter: document.getElementById("lbFilter")
   };
 
   var best = parseInt(storageGet("catmouse_best", "0"), 10) || 0;
@@ -1584,6 +1907,9 @@
     showScreen(dom.hud);
     resetWorld();
     resetScoring();
+    resetAbilities();
+    var abi = abilityOf(currentSkin);
+    dom.abilityBadge.innerHTML = '<span class="ab-ic">' + abi.icon + '</span>' + abi.name;
     dom.comboText.classList.add("hidden");
     dom.rankText.textContent = "排名：--";
     state = STATE_PLAY;
@@ -1716,6 +2042,7 @@
 
   function updateHud() {
     dom.scoreText.textContent = String(score);
+    if (ab) dom.abilityBadge.classList.toggle("flash", ab.flash > 0);
     if (combo >= 2) {
       dom.comboText.classList.remove("hidden");
       dom.comboText.textContent = "连击 x" + combo;
@@ -1728,6 +2055,7 @@
     if (state === STATE_PLAY) {
       elapsedPlayTime += dt;
       updateCat(dt);
+      updateAbilities(dt);
       updateCamera(dt);
       ensureChunksAround(camera.x, camera.y);
       pruneFarChunks(dt, camera.x, camera.y);
@@ -1756,9 +2084,12 @@
     if (state === STATE_START) { drawIdleScene(); return; }
     drawBackground();
     drawObstacles();
+    drawAbilityGround();
     drawDust();
     drawMice();
+    drawAbilityBehindCat();
     drawCat();
+    drawAbilityOverlay();
     drawEffects();
   }
 
@@ -1796,6 +2127,7 @@
   var skinPreviewCtx = skinPreview.getContext("2d");
   var skinNameEl = document.getElementById("skinName");
   var skinDescEl = document.getElementById("skinDesc");
+  var skinAbilityEl = document.getElementById("skinAbility");
   var diceBtn = document.getElementById("diceBtn");
   var skinCards = [];
 
@@ -1818,6 +2150,8 @@
     var k = window.CatArt.skinOf(id);
     skinNameEl.textContent = k.name;
     skinDescEl.textContent = k.desc;
+    var abi = abilityOf(id);
+    skinAbilityEl.innerHTML = '<b>' + abi.icon + ' ' + abi.name + '</b><span>' + abi.desc + '</span>';
     for (var i = 0; i < skinCards.length; i++) {
       var on = skinCards[i].dataset.skin === id;
       skinCards[i].classList.toggle("selected", on);
@@ -1834,7 +2168,7 @@
     var cv = document.createElement("canvas");
     b.appendChild(cv);
     var label = document.createElement("div");
-    label.textContent = k.name;
+    label.textContent = abilityOf(k.id).icon + k.name;
     b.appendChild(label);
     b.addEventListener("click", function () { selectSkin(k.id); });
     skinGrid.appendChild(b);
@@ -1881,6 +2215,7 @@
   }
   requestAnimationFrame(frame);
 
+  buildLbFilter();
   enterStart();
 
   // =======================================================================
@@ -1899,6 +2234,16 @@
     get runId() { return run.id; },
     get myRank() { return mySnapshotRank; },
     get skin() { return currentSkin; },
+    get ability() {
+      if (!ab) return null;
+      return { kind: ab.kind, procs: ab.procs, prints: ab.prints.length, shadow: ab.shadow.on ? { x: ab.shadow.x, y: ab.shadow.y } : null,
+        yarn: { x: ab.yarn.x, y: ab.yarn.y }, windOn: ab.wind.on, sneezeIn: ab.sneeze.next - ab.sneeze.t,
+        mice: mice.map(function (m) { return { slip: m.slip > 0, tangle: m.tangle > 0, stun: m.stun > 0 }; }) };
+    },
+    printSpots: function () { return ab ? ab.prints.map(function (p) { return { dx: p.x - cat.x, dy: p.y - cat.r * 0.6 - cat.y, age: p.age }; }) : []; },
+    forceSneeze: function () { if (ab) ab.sneeze.t = ab.sneeze.next; },
+    setMove: function (x, y) { moveDir.x = x; moveDir.y = y; },
+    stepSim: function (sec) { var n = Math.round(sec * 60); for (var i = 0; i < n; i++) update(1 / 60); },
     selectSkin: selectSkin,
     setFacing: function (a) { cat.facing = a; },
     get catAnim() { return { mode: catAnim.mode, dir: catAnim.dir, gulp: !!gulp }; },

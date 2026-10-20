@@ -17,6 +17,7 @@
       <div id="scoreText" class="hud-pill">0</div>
       <div id="comboText" class="hidden"></div>
       <div id="rankText" class="hud-pill small">排名：--</div>
+      <div id="abilityBadge" class="hud-pill small ability-badge"></div>
     </div>
     <div id="hudRight">
       <button id="hudLbBtn" class="icon-btn lb-hud-btn" aria-label="排行榜">🏆<span>排行</span></button>
@@ -31,6 +32,7 @@
       <canvas id="skinPreview" class="skin-preview" width="160" height="150" aria-hidden="true"></canvas>
       <div class="skin-name" id="skinName">橘子</div>
       <div class="skin-desc" id="skinDesc">活力满满的橘猫</div>
+      <div class="skin-ability" id="skinAbility"></div>
       <div class="section-title">选择你的小猫</div>
       <div class="skin-grid" id="skinGrid" role="radiogroup" aria-label="选择小猫"></div>
       <label class="nickname-label" for="nicknameInput">昵称</label>
@@ -90,6 +92,7 @@
     <div class="panel">
       <h2>排行榜</h2>
       <p class="lb-sub hidden" id="lbSub">游戏已暂停 · 每 5 秒自动刷新</p>
+      <div id="lbFilter" class="lb-filter" role="group" aria-label="按小猫筛选"></div>
       <div id="leaderboardList" class="leaderboard-list"></div>
       <button id="leaderboardCloseBtn" class="btn-secondary">关闭</button>
     </div>
