@@ -124,7 +124,12 @@ var cache=new Map(),bytes=0;
 function sprite(key,w,h,ox,oy,px,painter){var k=key+'@'+px;var c=cache.get(k);if(c)return c;
  var cv=document.createElement('canvas');cv.width=Math.max(1,Math.ceil(w*px));cv.height=Math.max(1,Math.ceil(h*px));
  var prev=x;x=cv.getContext('2d');x.scale(px,px);x.translate(ox,oy);painter();x=prev;
- c={cv:cv,ox:ox,oy:oy,px:px};cache.set(k,c);bytes+=cv.width*cv.height*4;return c}
+ c={cv:cv,ox:ox,oy:oy,px:px,dx:0,dy:0};
+ // v9：裁掉透明边（同屏 100+ 只老鼠时减少光栅化面积）
+ try{var g=cv.getContext('2d'),W2=cv.width,H2=cv.height,d=g.getImageData(0,0,W2,H2).data,x0=W2,y0=H2,x1=-1,y1=-1;
+  for(var yy=0;yy<H2;yy++)for(var xx=0;xx<W2;xx++)if(d[(yy*W2+xx)*4+3]>2){if(xx<x0)x0=xx;if(xx>x1)x1=xx;if(yy<y0)y0=yy;if(yy>y1)y1=yy}
+  if(x1>=x0&&(x1-x0+1)*(y1-y0+1)<W2*H2*0.9){var t=document.createElement('canvas');t.width=x1-x0+1;t.height=y1-y0+1;t.getContext('2d').drawImage(cv,-x0,-y0);c.cv=t;c.dx=x0;c.dy=y0}}catch(e){}
+ cache.set(k,c);bytes+=c.cv.width*c.cv.height*4;return c}
 function catSprite(skin,view,state,f,px){var k=A.skinOf(skin);return sprite('c:'+k.id+':'+view+':'+state+f,150,140,75,78,px,function(){paintCatFrame(k,view,state,f)})}
 function mouseSprite(type,view,state,f,px){return sprite('m:'+type+':'+view+':'+state+f,100,92,50,58,px,function(){paintMouseFrame(type,view,state,f)})}
 function dropSkin(skin){cache.forEach(function(v,k){if(k.indexOf('c:'+skin+':')===0){bytes-=v.cv.width*v.cv.height*4;cache.delete(k)}})}

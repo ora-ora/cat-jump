@@ -452,3 +452,22 @@ html, body { background: #a8de8e; }
 .skin-ability .evo-step { font-size: 10px; color: #a07a5a; display: inline-flex; flex-direction: column; align-items: center; min-width: 30px; }
 .skin-ability .evo-step em { font-style: normal; font-size: 15px; }
 .skin-ability .evo-desc { display: block; font-size: 11px; }
+
+/* v9 技能图鉴面板（点左上角 Lv 徽章打开，暂停游戏） */
+#hud #abilityBadge { pointer-events: auto; cursor: pointer; }
+.ab-panel { width: min(360px, 100%); }
+.ab-tabs { display: flex; gap: 4px; flex-wrap: wrap; justify-content: center; margin: 6px 0 8px; }
+.ab-tab { border: 0; border-radius: 12px; padding: 5px 9px; background: #f1ece6; font: inherit; font-size: 13px; color: #6b4a35; }
+.ab-tab.on { background: #ffc58f; font-weight: 700; }
+.ab-tab.mine::after { content: " ★"; color: #ff8a3d; }
+.ab-stages { display: flex; flex-direction: column; gap: 6px; text-align: left; margin-bottom: 10px; }
+.ab-st { display: flex; gap: 8px; align-items: center; padding: 7px 9px; border-radius: 12px; background: #eaf8e4; border: 2px solid transparent; }
+.ab-st .ic { font-size: 26px; width: 32px; text-align: center; }
+.ab-st .tx { flex: 1; min-width: 0; }
+.ab-st b { font-size: 14px; color: #5a3a2a; }
+.ab-st .d { font-size: 12px; color: #7a6a5a; }
+.ab-st .tag { font-size: 12px; margin-left: 4px; }
+.ab-st.cur { background: #ffe9a8; border-color: #ff9a3d; }
+.ab-st.lock { background: #eee; opacity: .55; }
+.ab-st .bar { height: 6px; background: #d8d0c8; border-radius: 3px; margin-top: 4px; overflow: hidden; }
+.ab-st .bar i { display: block; height: 100%; background: #ff9a3d; }

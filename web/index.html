@@ -17,7 +17,7 @@
       <div id="scoreText" class="hud-pill">0</div>
       <div id="comboText" class="hidden"></div>
       <div id="rankText" class="hud-pill small">排名：--</div>
-      <div id="abilityBadge" class="hud-pill small ability-badge"></div>
+      <div id="abilityBadge" class="hud-pill small ability-badge" role="button" tabindex="0" aria-label="查看技能图鉴（暂停）"></div>
     </div>
     <div id="hudRight">
       <button id="hudLbBtn" class="icon-btn lb-hud-btn" aria-label="排行榜">🏆<span>排行</span></button>
@@ -87,6 +87,16 @@
         <button id="restartBtn" class="btn-primary">再来一局</button>
       </div>
       <button id="homeBtn" class="btn-secondary">返回首页</button>
+    </div>
+  </div>
+
+  <div id="abilityScreen" class="overlay hidden">
+    <div class="panel ab-panel">
+      <h2>⏸ 技能图鉴</h2>
+      <p class="lb-sub">游戏已暂停 · 关闭后继续</p>
+      <div id="abTabs" class="ab-tabs" role="tablist"></div>
+      <div id="abStages" class="ab-stages"></div>
+      <button id="abilityCloseBtn" class="btn-secondary">关闭并继续</button>
     </div>
   </div>
 
