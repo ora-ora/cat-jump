@@ -428,3 +428,27 @@ html, body { background: #a8de8e; }
 .lb-row.lb-changed { animation: lb-changed 1.2s ease-out; }
 @keyframes lb-changed { 0% { background: #fff1c2; } 100% { background: transparent; } }
 .lb-hud-btn, .ability-badge { white-space: nowrap; }
+
+/* ---- 进化技能 ---- */
+.ability-badge { flex-direction: row; align-items: center; gap: 6px; padding: 4px 10px 4px 6px; }
+.ability-badge .ab-ic { font-size: 20px; display: inline-block; }
+.ability-badge .ab-txt { display: grid; grid-template-columns: auto 1fr; column-gap: 4px; align-items: center; line-height: 1.15; }
+.ability-badge .ab-lv { color: #ff7a3d; font-weight: 900; }
+.ability-badge .ab-name { font-weight: 700; font-size: 12px; }
+.ability-badge .ab-bar { grid-column: 1 / 3; display: block; height: 6px; width: 104px; border-radius: 3px; background: #f3e3d3; overflow: hidden; margin-top: 2px; }
+.ability-badge .ab-bar > i { display: block; height: 100%; background: linear-gradient(90deg, #ffb36b, #ff7a3d); border-radius: 3px; transition: width .3s; }
+.ability-badge .ab-prog { grid-column: 1 / 3; font-size: 10px; color: #a07a5a; }
+.ability-badge.max { box-shadow: 0 0 0 2px #ffd84a; }
+.ability-badge.max .ab-bar > i { background: linear-gradient(90deg, #ffd84a, #ffb000); }
+.ability-badge.evo .ab-ic { animation: ab-flip .7s ease-out; }
+@keyframes ab-flip { 0% { transform: rotateY(0) scale(1); } 50% { transform: rotateY(180deg) scale(1.5); } 100% { transform: rotateY(360deg) scale(1); } }
+.evo-banner { position: absolute; top: calc(max(10px, env(safe-area-inset-top)) + 150px); left: 50%; transform: translateX(-50%) scale(.6); z-index: 6; pointer-events: none;
+  background: #fff7d6; border: 3px solid #ffc94d; border-radius: 22px; padding: 8px 18px; text-align: center; box-shadow: 0 6px 18px rgba(224,122,51,.25); opacity: 0; white-space: nowrap; }
+.evo-banner b { display: block; color: #e07a33; font-size: 17px; }
+.evo-banner span { font-size: 12px; color: #8a6a4a; }
+.evo-banner.show { animation: evo-pop 2s ease-out forwards; }
+@keyframes evo-pop { 0% { opacity: 0; transform: translateX(-50%) scale(.6); } 12% { opacity: 1; transform: translateX(-50%) scale(1.08); } 20% { transform: translateX(-50%) scale(1); } 85% { opacity: 1; } 100% { opacity: 0; transform: translateX(-50%) scale(1); } }
+.skin-ability .evo-row { display: flex; justify-content: center; gap: 4px; margin: 2px 0; }
+.skin-ability .evo-step { font-size: 10px; color: #a07a5a; display: inline-flex; flex-direction: column; align-items: center; min-width: 30px; }
+.skin-ability .evo-step em { font-style: normal; font-size: 15px; }
+.skin-ability .evo-desc { display: block; font-size: 11px; }

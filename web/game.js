@@ -743,6 +743,7 @@
     for (var i = mice.length - 1; i >= 0; i--) {
       var m = mice[i];
       m.r = MOUSE_RADIUS * entityScaleMult;
+      if (m.hidden) continue; // 在纸箱/雪球里
       var dToCat = distance(m.x, m.y, cat.x, cat.y);
 
       if (m.state === "wander") {
@@ -835,303 +836,607 @@
   }
 
   // =======================================================================
-  // 被动能力（每款皮肤一个；全部由场景/动作触发，不看抓捕数、不看坐姿）
+  // 被动进化技能（/workspace/skills-design/SKILLS.md）：每只猫 1 个招牌技能，
+  // 本局累计抓捕 0/15/40/80/150 进化到 Lv1–Lv5，每级叠加一个新玩法。
+  // 技能只做 定身/聚拢/送到嘴边，最后一口必须猫自己吃到（煤球的箱子也要猫去撞）。
   // 数值为初版设计值，尚未做平衡调参。
   // =======================================================================
 
-  var ABILITIES = {
-    orange:  { id: "paw",    icon: "🐾", name: "梅花脚印",   desc: "跑过留下发光脚印，老鼠踩到会打滑转圈" },
-    black:   { id: "shadow", icon: "👥", name: "影子双胞胎", desc: "影子猫 1 秒后模仿你的路线，把老鼠赶向你" },
-    white:   { id: "yarn",   icon: "🧶", name: "毛线团跟班", desc: "毛线球滚在身后，碰到的老鼠被缠住" },
-    calico:  { id: "tail",   icon: "🌀", name: "尾巴扫扫",   desc: "急转弯时尾巴一甩，把身边老鼠扫到嘴边" },
-    blue:    { id: "wind",   icon: "🍃", name: "落叶风",     desc: "直线快跑 2 秒卷起风，把两侧老鼠吹到路线上" },
-    siamese: { id: "sneeze", icon: "🤧", name: "喷嚏惊魂",   desc: "时不时打喷嚏，把附近老鼠吓得挤成一团" }
+  var STAGE_AT = [0, 15, 40, 80, 150];
+  var SKILLS = {
+    orange:  { name: "喵喵小分队", icon: "🐱", lv: [["🐱", "跟屁小橘", "小奶猫每 8 秒扑住附近老鼠"], ["🐭", "叼回来", "按住后叼回你脚边"], ["🐱", "双胞胎包抄", "两只小猫左右包抄赶鼠"], ["🌀", "牧羊阵", "把鼠群圈成一团送到你面前"], ["🚂", "猫猫列车", "急转弯时队伍甩出扫鼠"]], evo: "纸箱打开，跳出新的小猫！" },
+    black:   { name: "魔术纸箱", icon: "📦", lv: [["📦", "神秘纸箱", "每 10 秒放纸箱，老鼠钻进去，撞箱全吃"], ["🔒", "自动关盖", "进鼠就关盖，最多关 3 只"], ["🕳", "地道连通", "钻空箱，从鼠多的箱子冒出"], ["⚙️", "传送带", "关住的箱子自动运向你"], ["🎩", "黑猫魔术秀", "每 25 秒开箱，老鼠晕倒排成一排"]], evo: "戴上礼帽，挥一下魔术棒！" },
+    white:   { name: "滚滚雪球", icon: "⚪", lv: [["⚪", "小雪球", "每 9 秒滚雪球冻住老鼠"], ["⛄", "越滚越大", "卷鼠变大，炸开晕倒一片"], ["🧊", "冰面滑道", "被冻的老鼠滑向你"], ["☃️", "雪人哨兵", "每 20 秒立雪人自动丢雪球"], ["❄️", "暴风雪舞", "每 30 秒冰环冻住并聚拢"]], evo: "头顶下了一阵小雪！" },
+    calico:  { name: "魔法毛线", icon: "🧶", lv: [["🧶", "套索", "每 7 秒套住最近老鼠拉近"], ["🪝", "双钩", "一次套两只"], ["🕸", "毛线网", "障碍之间织网粘住老鼠"], ["🎢", "荡秋千", "套到金鼠就荡过去"], ["⭐", "翻花绳", "每 25 秒星形阵拉到中间"]], evo: "毛线球滚出来，又多一种颜色！" },
+    blue:    { name: "圆滚滚旋风", icon: "🌪", lv: [["🌪", "小旋风", "直线跑 2 秒生成旋风吸晕老鼠"], ["🍃", "跟随旋风", "旋风在你身前开路"], ["↪️", "连锁跳", "吸完一群跳下一群"], ["✌️", "分身双旋", "急转弯一分为二"], ["🌀", "大胖龙卷", "每 30 秒团成球卷起全场"]], evo: "鼓起脸颊吹一口气！" },
+    siamese: { name: "歌剧喵", icon: "🎵", lv: [["🎵", "高音符", "每 8 秒音符让老鼠跳舞"], ["🎶", "和弦", "3 个音符追 3 只"], ["💃", "康加舞队", "跳舞的老鼠排队走向你"], ["🔦", "聚光灯", "每 20 秒鼠群停下鞠躬"], ["🎤", "老鼠合唱团", "每 30 秒老鼠围成半圆唱歌"]], evo: "戴上领结，“啦~”！" }
   };
-  function abilityOf(skin) { return ABILITIES[skin] || ABILITIES.orange; }
-
-  var AB_PRINT_EVERY = 0.15, AB_PRINT_LIFE = 4, AB_PRINT_MAX = 32, AB_SLIP_T = 0.6, AB_SLIP_CD = 2;
-  var AB_SHADOW_DELAY = 1.0, AB_SHADOW_R = 100, AB_SHADOW_PUSH = 55;
-  var AB_YARN_DELAY = 0.45, AB_YARN_R = 11, AB_TANGLE_T = 1.2, AB_TANGLE_CD = 5;
-  var AB_TAIL_TURN = Math.PI / 2, AB_TAIL_R = 70, AB_TAIL_CD = 0.6, AB_TAIL_PULL = 30;
-  var AB_WIND_HOLD = 2, AB_WIND_SIDE = 150, AB_WIND_PUSH = 45;
-  var AB_SNEEZE_MIN = 15, AB_SNEEZE_MAX = 25, AB_SNEEZE_R = 200, AB_SNEEZE_STUN = 0.5;
+  function skillOf(skin) { return SKILLS[skin] || SKILLS.orange; }
+  function stageFor(n) { var s2 = 1; for (var i = 1; i < STAGE_AT.length; i++) if (n >= STAGE_AT[i]) s2 = i + 1; return s2; }
 
   var ab = null;
   function resetAbilities() {
-    var rng = mulberry32((worldSeed ^ 0x5eed1234) >>> 0);
     ab = {
-      kind: abilityOf(currentSkin).id, procs: 0, flash: 0,
-      hist: [], prints: [], printT: 0,
-      shadow: { on: false, x: 0, y: 0, anim: newAnim(), cycle: 0 },
-      yarn: { x: cat.x, y: cat.y, rot: 0 },
-      tail: { last: cat.facing, acc: 0, cd: 0, swish: 0, dir: 0 },
-      wind: { dir: cat.facing, hold: 0, on: false, leaves: [], leafT: 0 },
-      sneeze: { rng: rng, next: AB_SNEEZE_MIN + rng() * (AB_SNEEZE_MAX - AB_SNEEZE_MIN), t: 0, anim: 0, x: 0, y: 0 }
+      skin: currentSkin, stage: 1, procs: 0, flash: 0, evoT: 0, hist: [], fx: [],
+      t: {}, kittens: [], boxes: [], balls: [], snowmen: [], webs: [], tornados: [], notes: [], spot: null, roll: 0, swing: null,
+      lastFacing: cat.facing, turnAcc: 0, straight: 0, straightDir: cat.facing
     };
+    ab.stage = stageFor(catches);
+    syncKittens();
   }
-  function abProc() { ab.procs++; ab.flash = 0.6; }
+  function abProc() { ab.procs++; ab.flash = 0.5; }
+  function cdReady(key, every, dt) {
+    ab.t[key] = (ab.t[key] == null ? every * 0.5 : ab.t[key]) - dt;
+    if (ab.t[key] <= 0) { ab.t[key] = every; return true; }
+    return false;
+  }
+  function freeMice() { var o = []; for (var i = 0; i < mice.length; i++) { var m = mice[i]; if (!m.hidden && !m.carried) o.push(m); } return o; }
+  function nearestMice(x, y, r, n, filt) {
+    var arr = [];
+    for (var i = 0; i < mice.length; i++) {
+      var m = mice[i]; if (m.hidden || m.carried) continue;
+      if (filt && !filt(m)) continue;
+      var d = distance(x, y, m.x, m.y); if (d <= r) arr.push([d, m]);
+    }
+    arr.sort(function (a, b) { return a[0] - b[0]; });
+    return arr.slice(0, n).map(function (a) { return a[1]; });
+  }
+  function stunM(m, t, kind) { if (!m || m.hidden) return; m.stun = Math.max(m.stun || 0, t); m.stunKind = kind; m.state = "wander"; }
+  function pullM(m, x, y, speed, t) { m.pullX = x; m.pullY = y; m.pullV = speed; m.pullT = t; }
+  function fx(kind, x, y, life, extra) { if (ab.fx.length > 60) ab.fx.shift(); var f = { k: kind, x: x, y: y, age: 0, life: life }; for (var q in extra) f[q] = extra[q]; ab.fx.push(f); }
+  function mouthPoint(dist) { return { x: cat.x + Math.cos(cat.facing) * dist, y: cat.y + Math.sin(cat.facing) * dist }; }
   function histAt(delay) {
     var tt = elapsedPlayTime - delay, h = ab.hist;
-    if (!h.length) return { x: cat.x, y: cat.y, a: cat.facing, v: 0 };
+    if (!h.length) return { x: cat.x, y: cat.y, a: cat.facing };
     for (var i = h.length - 1; i >= 0; i--) if (h[i].t <= tt) return h[i];
     return h[0];
   }
   function angDiff(a, b) { var d = a - b; while (d > Math.PI) d -= Math.PI * 2; while (d < -Math.PI) d += Math.PI * 2; return d; }
 
+  function syncKittens() {
+    if (ab.skin !== "orange") return;
+    var want = ab.stage >= 5 ? 3 : ab.stage >= 3 ? 2 : 1;
+    while (ab.kittens.length < want) ab.kittens.push({ x: cat.x, y: cat.y, mode: "follow", t: 0, target: null, anim: newAnim(), cycle: 0, side: ab.kittens.length ? -1 : 1, idx: ab.kittens.length });
+  }
+
+  function checkEvolution() {
+    var st = stageFor(catches);
+    if (st <= ab.stage) return;
+    ab.stage = st; ab.evoT = 1.0; ab.t = {}; // 进化：所有冷却重置 → 立刻演示新形态
+    syncKittens();
+    var k = skillOf(ab.skin), lv = k.lv[st - 1];
+    showEvoBanner("技能进化：" + lv[1] + "！", k.evo);
+    updateSkillBadge(true);
+    fx("evo", cat.x, cat.y, 1.0, {});
+    if (sfx && sfx.rankUp) { try { sfx.rankUp(); setTimeout(sfx.rankUp, 120); } catch (e) { /* ignore */ } }
+  }
+
   function updateAbilities(dt) {
     if (!ab) resetAbilities();
-    var esm = entityScaleMult;
-    var speed = Math.sqrt(cat.vx * cat.vx + cat.vy * cat.vy);
-    var moving = speed > MOVE_SPEED * 0.5;
-    ab.flash = Math.max(0, ab.flash - dt);
-    ab.hist.push({ t: elapsedPlayTime, x: cat.x, y: cat.y, a: cat.facing, v: speed });
-    while (ab.hist.length > 2 && ab.hist[0].t < elapsedPlayTime - 1.3) ab.hist.shift();
-    var i, m, d;
+    var esm = entityScaleMult, i, j, m, d;
+    ab.flash = Math.max(0, ab.flash - dt); ab.evoT = Math.max(0, ab.evoT - dt);
+    checkEvolution();
+    ab.hist.push({ t: elapsedPlayTime, x: cat.x, y: cat.y, a: cat.facing });
+    while (ab.hist.length > 2 && ab.hist[0].t < elapsedPlayTime - 1.2) ab.hist.shift();
+    var speed = Math.sqrt(cat.vx * cat.vx + cat.vy * cat.vy), moving = speed > MOVE_SPEED * 0.5;
+    if (speed > 4) ab.turnAcc += Math.abs(angDiff(cat.facing, ab.lastFacing));
+    ab.lastFacing = cat.facing; ab.turnAcc *= Math.exp(-dt * 3);
+    var sharpTurn = false;
+    if (ab.turnAcc > Math.PI / 2) { sharpTurn = true; ab.turnAcc = 0; }
+    if (moving && Math.abs(angDiff(cat.facing, ab.straightDir)) < 0.25) ab.straight += dt; else { ab.straight = 0; ab.straightDir = cat.facing; }
+    var S = ab.stage;
+    for (i = ab.fx.length - 1; i >= 0; i--) { ab.fx[i].age += dt; if (ab.fx[i].age > ab.fx[i].life) ab.fx.splice(i, 1); }
 
-    if (ab.kind === "paw") {
-      ab.printT -= dt;
-      if (moving && ab.printT <= 0) {
-        ab.printT = AB_PRINT_EVERY;
-        var side = (ab.prints.length % 2) ? 1 : -1;
-        ab.prints.push({ x: cat.x - Math.sin(cat.facing) * side * 5 * esm, y: cat.y + Math.cos(cat.facing) * side * 5 * esm + cat.r * 0.6, a: cat.facing, age: 0 });
-        if (ab.prints.length > AB_PRINT_MAX) ab.prints.shift();
-      }
-      for (i = ab.prints.length - 1; i >= 0; i--) { ab.prints[i].age += dt; if (ab.prints[i].age > AB_PRINT_LIFE) ab.prints.splice(i, 1); }
-      for (i = 0; i < mice.length; i++) {
-        m = mice[i];
-        if ((m.slip || 0) > 0 || (m.slipCd || 0) > 0) continue;
-        for (var k = 0; k < ab.prints.length; k++) {
-          var p = ab.prints[k];
-          if (p.age < 0.25) continue; // 刚落下的脚印不算，避免猫脚下直接触发
-          if (distance(m.x, m.y, p.x, p.y - cat.r * 0.6 + m.r * 0.6) < (9 * esm + m.r * 0.6)) {
-            m.slip = AB_SLIP_T; m.slipCd = AB_SLIP_CD; m.slipA = m.facing; abProc(); break;
+    if (ab.skin === "orange") updateKittens(dt, S, esm, sharpTurn);
+    else if (ab.skin === "black") updateBoxes(dt, S, esm);
+    else if (ab.skin === "white") updateSnow(dt, S, esm);
+    else if (ab.skin === "calico") updateYarn(dt, S, esm);
+    else if (ab.skin === "blue") updateWind(dt, S, esm, sharpTurn);
+    else if (ab.skin === "siamese") updateOpera(dt, S, esm);
+  }
+
+  // ---- 橘子：喵喵小分队 ----
+  function updateKittens(dt, S, esm, sharpTurn) {
+    var K = ab.kittens, i, k;
+    for (i = 0; i < K.length; i++) {
+      k = K[i];
+      var tx, ty;
+      if (S >= 5) { var h = histAt(0.22 * (i + 1)); tx = h.x; ty = h.y; }
+      else { var ang = cat.facing + Math.PI + k.side * 0.7; tx = cat.x + Math.cos(ang) * 34 * esm; ty = cat.y + Math.sin(ang) * 34 * esm; }
+      var spd = 0;
+      k.t -= dt;
+      if (k.mode === "follow") {
+        var px = k.x, py = k.y;
+        k.x += (tx - k.x) * (1 - Math.exp(-dt * 8)); k.y += (ty - k.y) * (1 - Math.exp(-dt * 8));
+        spd = distance(px, py, k.x, k.y) / Math.max(dt, 1e-3);
+      } else if (k.mode === "dash" || k.mode === "carry" || k.mode === "herd") {
+        var gx = k.gx, gy = k.gy;
+        if (k.mode === "dash" && k.target && !k.target.hidden && mice.indexOf(k.target) >= 0) { gx = k.target.x; gy = k.target.y; }
+        if (k.mode === "carry") { var mp = mouthPoint(30 * esm); gx = mp.x; gy = mp.y; }
+        var dv = normalize(gx - k.x, gy - k.y), dd = distance(k.x, k.y, gx, gy), v = (k.mode === "carry" ? 230 : 380) * esm;
+        k.x += dv.x * Math.min(dd, v * dt); k.y += dv.y * Math.min(dd, v * dt); spd = v;
+        if (k.mode === "carry" && k.target) { k.target.x = k.x + dv.x * 8 * esm; k.target.y = k.y + dv.y * 8 * esm; }
+        if (dd < 6 * esm || k.t <= 0) {
+          if (k.mode === "dash" && k.target && mice.indexOf(k.target) >= 0) {
+            stunM(k.target, 1.5, "pin"); fx("bang", k.x, k.y, 0.5, {}); abProc();
+            if (S >= 3) { // 包抄：把目标附近的老鼠一起赶向你
+              var grp = nearestMice(k.target.x, k.target.y, 90 * esm, 6);
+              for (var g = 0; g < grp.length; g++) { var mp2 = mouthPoint(40 * esm); pullM(grp[g], mp2.x, mp2.y, 150 * esm, 1.0); }
+            }
+            if (S >= 2 && k.idx === 0) { k.mode = "carry"; k.t = 1.6; k.target.carried = true; continue; }
           }
+          if (k.mode === "carry" && k.target) { k.target.carried = false; stunM(k.target, 1.0, "pin"); }
+          k.mode = "follow"; k.target = null;
         }
       }
-    } else if (ab.kind === "shadow") {
-      var sh = ab.shadow, hs = histAt(AB_SHADOW_DELAY);
-      sh.on = elapsedPlayTime > AB_SHADOW_DELAY;
-      var smv = Math.sqrt((hs.x - sh.x) * (hs.x - sh.x) + (hs.y - sh.y) * (hs.y - sh.y)) / Math.max(dt, 1e-3);
-      sh.x = hs.x; sh.y = hs.y;
-      stepAnim(sh.anim, dt, hs.v > RUN_SPEED_CAT, hs.a);
-      sh.cycle += dt * (smv / 24 + 0.3);
-      if (sh.on && distance(sh.x, sh.y, cat.x, cat.y) > cat.r * 2) {
-        for (i = 0; i < mice.length; i++) {
-          m = mice[i];
-          d = distance(m.x, m.y, sh.x, sh.y);
-          if (d > AB_SHADOW_R * esm * 1.3) m.herded = false;
-          if (d > AB_SHADOW_R * esm) continue;
-          var aw = normalize(m.x - sh.x, m.y - sh.y), tc = normalize(cat.x - m.x, cat.y - m.y);
-          var hv = normalize(aw.x * 0.5 + tc.x, aw.y * 0.5 + tc.y);
-          m.pushX = (m.pushX || 0) + hv.x * AB_SHADOW_PUSH * esm;
-          m.pushY = (m.pushY || 0) + hv.y * AB_SHADOW_PUSH * esm;
-          if (!m.herded) { m.herded = true; abProc(); }
+      stepAnim(k.anim, dt, spd > 20, Math.atan2(ty - k.y, tx - k.x));
+      if (k.mode !== "follow") k.anim.dir = ANIM.dirOf(Math.atan2((k.gy || k.y) - k.y + 0.001, (k.gx || k.x) - k.x));
+      k.cycle += dt * (spd / 24 + 0.3);
+    }
+    if (cdReady("pounce", 8, dt)) {
+      var tgts = nearestMice(cat.x, cat.y, 220 * esm, K.length, function (m) { return !(m.stun > 0); });
+      if (tgts.length) {
+        for (i = 0; i < K.length; i++) {
+          k = K[i]; if (k.mode !== "follow") continue;
+          var tg = tgts[0];
+          if (S >= 3 && K.length >= 2 && i < 2) { // 左右包抄同一目标
+            var perp = Math.atan2(tg.y - cat.y, tg.x - cat.x) + Math.PI / 2 * (i === 0 ? 1 : -1);
+            k.gx = tg.x + Math.cos(perp) * 40 * esm; k.gy = tg.y + Math.sin(perp) * 40 * esm;
+          } else { tg = tgts[Math.min(i, tgts.length - 1)]; k.gx = tg.x; k.gy = tg.y; }
+          k.target = tg; k.mode = "dash"; k.t = 0.9;
+          fx("arc", k.x, k.y, 0.5, { tx: tg.x, ty: tg.y });
         }
       }
-    } else if (ab.kind === "yarn") {
-      var y = ab.yarn, hy = histAt(AB_YARN_DELAY);
-      var nx = y.x + (hy.x - y.x) * (1 - Math.exp(-dt * 8)), ny = y.y + (hy.y - y.y) * (1 - Math.exp(-dt * 8));
-      y.rot += Math.sqrt((nx - y.x) * (nx - y.x) + (ny - y.y) * (ny - y.y)) / (AB_YARN_R * esm);
-      y.x = nx; y.y = ny;
-      for (i = 0; i < mice.length; i++) {
-        m = mice[i];
-        if ((m.tangle || 0) > 0 || (m.tangleCd || 0) > 0) continue;
-        if (distance(m.x, m.y, y.x, y.y) < AB_YARN_R * esm + m.r) { m.tangle = AB_TANGLE_T; m.tangleCd = AB_TANGLE_CD; abProc(); }
+    }
+    if (S >= 4 && cdReady("herd", 6, dt)) { // 牧羊阵：3 只以上的鼠群圈成一团停在你前方
+      var fm = freeMice(), best = null, bestN = 0;
+      for (i = 0; i < fm.length; i++) {
+        if (distance(fm[i].x, fm[i].y, cat.x, cat.y) > 320 * esm) continue;
+        var nb = nearestMice(fm[i].x, fm[i].y, 100 * esm, 8);
+        if (nb.length > bestN) { bestN = nb.length; best = nb; }
       }
-    } else if (ab.kind === "tail") {
-      var tl = ab.tail;
-      tl.cd = Math.max(0, tl.cd - dt); tl.swish = Math.max(0, tl.swish - dt);
-      if (speed > 4) tl.acc += Math.abs(angDiff(cat.facing, tl.last));
-      tl.last = cat.facing;
-      tl.acc *= Math.exp(-dt * 3);
-      if (tl.acc > AB_TAIL_TURN && tl.cd <= 0) {
-        tl.acc = 0; tl.cd = AB_TAIL_CD; tl.swish = 0.35; tl.dir = cat.facing;
-        var fx = cat.x + Math.cos(cat.facing) * cat.r * 1.2, fy = cat.y + Math.sin(cat.facing) * cat.r * 1.2;
-        var hit = false;
-        for (i = 0; i < mice.length; i++) {
-          m = mice[i];
-          if (distance(m.x, m.y, cat.x, cat.y) > AB_TAIL_R * esm) continue;
-          var tv = normalize(fx - m.x, fy - m.y);
-          m.sweepT = 0.2; m.sweepX = tv.x * AB_TAIL_PULL * esm / 0.2; m.sweepY = tv.y * AB_TAIL_PULL * esm / 0.2;
-          hit = true;
-        }
-        if (hit) abProc();
-      }
-    } else if (ab.kind === "wind") {
-      var w = ab.wind;
-      if (moving && Math.abs(angDiff(cat.facing, w.dir)) < 0.25) w.hold += dt;
-      else { w.hold = 0; w.dir = cat.facing; }
-      var wasOn = w.on;
-      w.on = moving && w.hold >= AB_WIND_HOLD;
-      if (w.on && !wasOn) abProc();
-      var cf = Math.cos(cat.facing), sf = Math.sin(cat.facing);
-      if (w.on) {
-        for (i = 0; i < mice.length; i++) {
-          m = mice[i];
-          var rx = m.x - cat.x, ry = m.y - cat.y;
-          var along = rx * cf + ry * sf, lat = -rx * sf + ry * cf;
-          if (along < -60 * esm || along > 240 * esm || Math.abs(lat) < cat.r || Math.abs(lat) > AB_WIND_SIDE * esm) continue;
-          var sg = lat > 0 ? -1 : 1;
-          m.pushX = (m.pushX || 0) + (-sf) * sg * AB_WIND_PUSH * esm;
-          m.pushY = (m.pushY || 0) + (cf) * sg * AB_WIND_PUSH * esm;
-        }
-        w.leafT -= dt;
-        if (w.leafT <= 0 && w.leaves.length < 24) {
-          w.leafT = 0.08;
-          var sgn = Math.random() < 0.5 ? -1 : 1, off = (40 + Math.random() * 100) * esm;
-          w.leaves.push({ x: cat.x - sf * sgn * off + cf * (Math.random() * 160 - 20) * esm, y: cat.y + cf * sgn * off + sf * (Math.random() * 160 - 20) * esm,
-            vx: sf * sgn * 50 + cf * 30, vy: -cf * sgn * 50 + sf * 30, rot: Math.random() * 6, age: 0, life: 0.9, c: Math.random() < 0.5 ? "#8fd16a" : "#f2b84b" });
-        }
-      }
-      for (i = w.leaves.length - 1; i >= 0; i--) {
-        var lf = w.leaves[i];
-        lf.age += dt; lf.x += lf.vx * dt; lf.y += lf.vy * dt; lf.rot += dt * 8;
-        if (lf.age > lf.life) w.leaves.splice(i, 1);
-      }
-    } else if (ab.kind === "sneeze") {
-      var sz = ab.sneeze;
-      sz.t += dt; sz.anim = Math.max(0, sz.anim - dt);
-      if (sz.t >= sz.next) {
-        sz.t = 0; sz.next = AB_SNEEZE_MIN + sz.rng() * (AB_SNEEZE_MAX - AB_SNEEZE_MIN); sz.anim = 0.9;
-        sz.x = cat.x; sz.y = cat.y;
-        var near = [], cx = 0, cy = 0;
-        for (i = 0; i < mice.length; i++) if (distance(mice[i].x, mice[i].y, cat.x, cat.y) < AB_SNEEZE_R * esm) { near.push(mice[i]); cx += mice[i].x; cy += mice[i].y; }
-        if (near.length) {
-          cx /= near.length; cy /= near.length;
-          for (i = 0; i < near.length; i++) { near[i].stun = AB_SNEEZE_STUN; near[i].clusterX = cx; near[i].clusterY = cy; }
-        }
+      if (best && bestN >= 3) {
+        var mp3 = mouthPoint(70 * esm);
+        for (i = 0; i < best.length; i++) { pullM(best[i], mp3.x + (Math.random() - 0.5) * 30 * esm, mp3.y + (Math.random() - 0.5) * 30 * esm, 170 * esm, 1.6); stunM(best[i], 2.6, "pin"); }
+        fx("ring", best[0].x, best[0].y, 1.0, { r: 70 * esm });
         abProc();
       }
     }
-  }
-
-  // 在 updateMice 里、位移之前调用：叠加能力对老鼠的影响
-  function applyAbilityToMouse(m, dt) {
-    if (m.slipCd > 0) m.slipCd -= dt;
-    if (m.tangleCd > 0) m.tangleCd -= dt;
-    if (m.tangle > 0) { m.tangle -= dt; m.vx = 0; m.vy = 0; }
-    else if (m.stun > 0) {
-      m.stun -= dt;
-      var dc = distance(m.x, m.y, m.clusterX, m.clusterY);
-      if (dc > 6) { var cv = normalize(m.clusterX - m.x, m.clusterY - m.y); m.vx = cv.x * m.speed * 0.8; m.vy = cv.y * m.speed * 0.8; }
-      else { m.vx = 0; m.vy = 0; }
-    } else if (m.slip > 0) {
-      m.slip -= dt;
-      m.slipA = (m.slipA || 0) + dt * 16;
-      m.vx = Math.cos(m.slipA) * m.speed * 0.25; m.vy = Math.sin(m.slipA) * m.speed * 0.25;
+    if (S >= 5 && sharpTurn && cdReady("whip", 1.2, 0)) { // 猫猫列车：急转弯甩尾扫鼠
+      var hit = false;
+      for (i = 0; i < K.length; i++) {
+        var near = nearestMice(K[i].x, K[i].y, 90 * esm, 4);
+        for (var q = 0; q < near.length; q++) { pullM(near[q], cat.x, cat.y, 260 * esm, 0.6); hit = true; }
+      }
+      fx("toot", cat.x, cat.y, 0.8, {});
+      if (hit) abProc();
     }
-    if (m.sweepT > 0) { m.sweepT -= dt; m.vx += m.sweepX; m.vy += m.sweepY; }
-    if (m.pushX || m.pushY) { m.vx += m.pushX; m.vy += m.pushY; }
-    m.pushX = 0; m.pushY = 0;
   }
 
-  // ---- 能力画面 ----
-  function drawPaw(x, y, a, sc, alpha) {
-    ctx.save(); ctx.translate(x, y); ctx.rotate(a + Math.PI / 2); ctx.globalAlpha = alpha;
-    ctx.fillStyle = "#ff8fb1"; ctx.shadowColor = "#ffd1e0"; ctx.shadowBlur = 6 * sc;
-    ctx.beginPath(); ctx.ellipse(0, 2 * sc, 4.2 * sc, 3.6 * sc, 0, 0, Math.PI * 2); ctx.fill();
-    for (var t = 0; t < 4; t++) { ctx.beginPath(); ctx.arc((t - 1.5) * 2.8 * sc, (-3.2 - (t === 1 || t === 2 ? 1.2 : 0)) * sc, 1.5 * sc, 0, Math.PI * 2); ctx.fill(); }
-    ctx.restore();
+  // ---- 煤球：魔术纸箱 ----
+  function boxCap(S) { return S >= 2 ? 3 : 99; }
+  function updateBoxes(dt, S, esm) {
+    var B = ab.boxes, i, b, m;
+    if (cdReady("box", 10, dt)) {
+      var p = mouthPoint(150 * esm);
+      if (B.length >= 3) { var old = B.shift(); releaseBox(old, 0); }
+      B.push({ x: p.x, y: p.y, mice: [], closed: false, age: 0, shake: 0 }); abProc();
+    }
+    for (i = B.length - 1; i >= 0; i--) {
+      b = B[i]; b.age += dt; b.shake = Math.max(0, b.shake - dt);
+      // 老鼠好奇钻箱
+      if (!b.closed || b.mice.length < boxCap(S)) {
+        for (var k = 0; k < mice.length; k++) {
+          m = mice[k]; if (m.hidden || m.carried || m.type === "gold" && Math.random() < 0.5 * dt) continue;
+          var d = distance(m.x, m.y, b.x, b.y);
+          if (d < 150 * esm && !(m.stun > 0)) m.lureX = b.x, m.lureY = b.y;
+          if (d < 14 * esm && b.mice.length < boxCap(S)) { m.hidden = true; m.boxT = 3; b.mice.push(m); b.shake = 0.4; if (S >= 2) b.closed = true; }
+        }
+      }
+      // Lv1：没关盖的箱子，老鼠躲 3 秒后跑出来
+      if (S < 2) for (var q = b.mice.length - 1; q >= 0; q--) { b.mice[q].boxT -= dt; if (b.mice[q].boxT <= 0) { b.mice[q].hidden = false; b.mice[q].x = b.x + 16 * esm; b.mice.splice(q, 1); } }
+      // Lv4 传送带：关住老鼠的箱子运向你
+      if (S >= 4 && b.mice.length) { var dv = normalize(cat.x - b.x, cat.y - b.y); b.x += dv.x * 70 * esm * dt; b.y += dv.y * 70 * esm * dt; b.belt = true; } else b.belt = false;
+      // 撞箱：吃掉里面所有老鼠
+      if (distance(cat.x, cat.y, b.x, b.y) < cat.r + 16 * esm) {
+        if (b.mice.length) { eatBox(b); B.splice(i, 1); }
+        else if (S >= 3 && !(ab.t.tunnel > 0)) { // 地道：从鼠最多的箱子冒出来
+          var best = null; for (var z = 0; z < B.length; z++) if (B[z] !== b && B[z].mice.length && (!best || B[z].mice.length > best.mice.length)) best = B[z];
+          if (best) { fx("tunnel", cat.x, cat.y, 0.6, {}); cat.x = best.x; cat.y = best.y; fx("tunnel", cat.x, cat.y, 0.6, {}); ab.t.tunnel = 1.2; abProc(); }
+        }
+      }
+    }
+    if (ab.t.tunnel > 0) ab.t.tunnel -= dt;
+    if (S >= 5 && cdReady("magic", 25, dt)) { // 魔术秀：箱子全开，老鼠晕倒排成一排
+      var popped = [];
+      for (i = 0; i < B.length; i++) { if (distance(B[i].x, B[i].y, cat.x, cat.y) < 500 * esm) { popped = popped.concat(B[i].mice); B[i].mice = []; B[i].closed = false; fx("confetti", B[i].x, B[i].y, 1.2, {}); } }
+      var perpA = cat.facing + Math.PI / 2, base = mouthPoint(60 * esm);
+      for (i = 0; i < popped.length; i++) {
+        m = popped[i]; m.hidden = false;
+        var off = (i - (popped.length - 1) / 2) * 24 * esm;
+        m.x = base.x + Math.cos(perpA) * off; m.y = base.y + Math.sin(perpA) * off; stunM(m, 3, "dizzy");
+      }
+      fx("hat", cat.x, cat.y, 1.2, {}); abProc();
+    }
+  }
+  function eatBox(b) {
+    for (var i = 0; i < b.mice.length; i++) { var m = b.mice[i]; var idx = mice.indexOf(m); if (idx >= 0) { m.hidden = false; m.x = b.x; m.y = b.y; onCapture(m); mice.splice(idx, 1); } }
+    b.mice = []; fx("confetti", b.x, b.y, 0.8, {});
+  }
+  function releaseBox(b) { for (var i = 0; i < b.mice.length; i++) { b.mice[i].hidden = false; b.mice[i].x = b.x; b.mice[i].y = b.y; } b.mice = []; }
+
+  // ---- 雪团：滚滚雪球 ----
+  function updateSnow(dt, S, esm) {
+    var i, j, m, b;
+    if (cdReady("ball", 9, dt)) { ab.balls.push({ x: cat.x, y: cat.y, a: cat.facing, t: 0, r: 9, mice: [], rot: 0, trail: [] }); abProc(); }
+    for (i = ab.balls.length - 1; i >= 0; i--) {
+      b = ab.balls[i]; b.t += dt;
+      var v = 240 * esm, nx = b.x + Math.cos(b.a) * v * dt, ny = b.y + Math.sin(b.a) * v * dt;
+      b.rot += v * dt / (b.r * esm);
+      var obs = queryNearbyObstacles(nx, ny), blocked = false;
+      for (j = 0; j < obs.length; j++) { var o = obs[j]; if (nx > o.x - b.r && nx < o.x + o.w + b.r && ny > o.y - b.r && ny < o.y + o.h + b.r) { blocked = true; break; } }
+      if (!blocked) { b.x = nx; b.y = ny; }
+      if (S >= 3 && (b.trail.length === 0 || distance(b.x, b.y, b.trail[b.trail.length - 1].x, b.trail[b.trail.length - 1].y) > 14 * esm)) { b.trail.push({ x: b.x, y: b.y }); fx("ice", b.x, b.y, 3, {}); }
+      var done = blocked || b.t > (S >= 2 ? 2 : 1.6);
+      for (j = 0; j < mice.length; j++) {
+        m = mice[j]; if (m.hidden || m.carried) continue;
+        if (distance(m.x, m.y, b.x, b.y) < (b.r * esm + m.r)) {
+          if (S >= 2) { m.hidden = true; b.mice.push(m); b.r = Math.min(26, b.r + 3); }
+          else { freezeM(m, 2, S); done = true; break; }
+        }
+      }
+      if (done) {
+        if (S >= 2) {
+          for (j = 0; j < b.mice.length; j++) { m = b.mice[j]; m.hidden = false; var a2 = j * 2.4; m.x = b.x + Math.cos(a2) * 20 * esm; m.y = b.y + Math.sin(a2) * 20 * esm; freezeM(m, 2.5, S); }
+          var near = nearestMice(b.x, b.y, 60 * esm, 8); for (j = 0; j < near.length; j++) freezeM(near[j], 2.0, S);
+          fx("burst", b.x, b.y, 0.6, { r: 60 * esm });
+        }
+        ab.balls.splice(i, 1);
+      }
+    }
+    if (S >= 4 && cdReady("snowman", 20, dt)) {
+      if (ab.snowmen.length >= 2) ab.snowmen.shift();
+      var sa = cat.facing + Math.PI / 2 * (ab.snowmen.length ? -1 : 1);
+      ab.snowmen.push({ x: cat.x + Math.cos(sa) * 90 * esm, y: cat.y + Math.sin(sa) * 90 * esm, t: 0, life: 25, cd: 1 }); abProc();
+    }
+    for (i = ab.snowmen.length - 1; i >= 0; i--) {
+      var sm = ab.snowmen[i]; sm.t += dt; sm.cd -= dt;
+      if (sm.t > sm.life) { ab.snowmen.splice(i, 1); continue; }
+      if (sm.cd <= 0) {
+        var tg = nearestMice(sm.x, sm.y, 220 * esm, 1, function (q) { return !(q.stun > 0); })[0];
+        if (tg) { sm.cd = 2.5; ab.notes.push({ k: "snow", x: sm.x, y: sm.y - 20 * esm, tgt: tg, v: 320 }); }
+      }
+    }
+    updateProjectiles(dt, esm, function (m) { freezeM(m, 2, S); });
+    if (S >= 5 && cdReady("blizzard", 30, dt)) {
+      var ring = nearestMice(cat.x, cat.y, 220 * esm, 20);
+      for (i = 0; i < ring.length; i++) { freezeM(ring[i], 3, S); pullM(ring[i], cat.x, cat.y, 130 * esm, 2.5); }
+      fx("blizzard", cat.x, cat.y, 1.6, { r: 220 * esm }); abProc();
+    }
+  }
+  function freezeM(m, t, S) {
+    stunM(m, t, "ice");
+    if (S >= 3) pullM(m, cat.x, cat.y, 90 * entityScaleMult, t); // 冰面滑道：被冻的老鼠滑向你
+  }
+
+  // ---- 三花：魔法毛线 ----
+  function updateYarn(dt, S, esm) {
+    var i, m;
+    if (cdReady("lasso", 7, dt)) {
+      var tg = nearestMice(cat.x, cat.y, 240 * esm, S >= 2 ? 2 : 1);
+      for (i = 0; i < tg.length; i++) {
+        m = tg[i];
+        var dv = normalize(cat.x - m.x, cat.y - m.y), pd = Math.min(120 * esm, distance(m.x, m.y, cat.x, cat.y) - cat.r);
+        pullM(m, m.x + dv.x * pd, m.y + dv.y * pd, 260 * esm, 0.6); stunM(m, 0.9, "rope");
+        fx("lasso", cat.x, cat.y, 0.6, { m: m, c: i ? "#8fc8ff" : "#ff8fb1" });
+        if (S >= 4 && m.type === "gold") { ab.swing = { x0: cat.x, y0: cat.y, m: m, t: 0 }; }
+      }
+      if (tg.length) abProc();
+    }
+    if (ab.swing) { // 荡秋千：顺着毛线荡到金鼠身边
+      var sw = ab.swing; sw.t += dt;
+      var k = Math.min(1, sw.t / 0.4);
+      if (mice.indexOf(sw.m) < 0) ab.swing = null;
+      else { cat.x = sw.x0 + (sw.m.x - sw.x0) * k; cat.y = sw.y0 + (sw.m.y - sw.y0) * k - Math.sin(k * Math.PI) * 30 * esm; if (k >= 1) ab.swing = null; }
+    }
+    if (S >= 3) {
+      var obs = queryNearbyObstacles(cat.x, cat.y), near = [];
+      for (i = 0; i < obs.length; i++) { var o = obs[i], cx = o.x + o.w / 2, cy = o.y + o.h / 2; if (distance(cx, cy, cat.x, cat.y) < 220 * esm) near.push({ x: cx, y: cy, d: distance(cx, cy, cat.x, cat.y) }); }
+      near.sort(function (a, b) { return a.d - b.d; });
+      if (near.length >= 2 && cdReady("web", 3, dt)) {
+        var a = near[0], b2 = near[1];
+        // 只有猫正好从两块障碍"之间"穿过时才织网
+        var vx = b2.x - a.x, vy = b2.y - a.y, L2 = vx * vx + vy * vy, tt = clamp01(((cat.x - a.x) * vx + (cat.y - a.y) * vy) / L2);
+        var px = a.x + vx * tt, py = a.y + vy * tt;
+        if (tt > 0.15 && tt < 0.85 && distance(px, py, cat.x, cat.y) < 40 * esm && Math.sqrt(L2) < 300 * esm) {
+          if (ab.webs.length >= 2) ab.webs.shift();
+          ab.webs.push({ x1: a.x, y1: a.y, x2: b2.x, y2: b2.y, t: 0, life: 8 }); abProc();
+        } else ab.t.web = 0.2;
+      }
+    }
+    for (i = ab.webs.length - 1; i >= 0; i--) {
+      var w = ab.webs[i]; w.t += dt; if (w.t > w.life) { ab.webs.splice(i, 1); continue; }
+      for (var j = 0; j < mice.length; j++) {
+        m = mice[j]; if (m.hidden || m.stun > 0) continue;
+        var wx = w.x2 - w.x1, wy = w.y2 - w.y1, wl = wx * wx + wy * wy, u = clamp01(((m.x - w.x1) * wx + (m.y - w.y1) * wy) / wl);
+        if (distance(m.x, m.y, w.x1 + wx * u, w.y1 + wy * u) < 12 * esm) stunM(m, 4, "web");
+      }
+    }
+    if (S >= 5 && cdReady("star", 25, dt)) {
+      var st = nearestMice(cat.x, cat.y, 200 * esm, 20);
+      for (i = 0; i < st.length; i++) { pullM(st[i], cat.x, cat.y, 250 * esm, 1.0); stunM(st[i], 1.2, "rope"); }
+      fx("star", cat.x, cat.y, 1.2, { r: 200 * esm }); abProc();
+    }
+  }
+
+  // ---- 蓝灰：圆滚滚旋风 ----
+  function updateWind(dt, S, esm, sharpTurn) {
+    var i, j, tw, m;
+    if (ab.tornados.length === 0 && ab.straight >= 2 && !(ab.t.windCd > 0)) {
+      var p = mouthPoint(120 * esm);
+      ab.tornados.push({ x: p.x, y: p.y, t: 0, life: S >= 2 ? 4 : 3, r: 60, hops: 0, follow: S >= 2, sucked: 0 }); abProc();
+    }
+    if (ab.t.windCd > 0) ab.t.windCd -= dt;
+    if (S >= 4 && sharpTurn && !(ab.t.splitCd > 0)) {
+      ab.t.splitCd = 5;
+      for (var sd = -1; sd <= 1; sd += 2) { var aa = cat.facing + sd * Math.PI / 2; ab.tornados.push({ x: cat.x + Math.cos(aa) * 70 * esm, y: cat.y + Math.sin(aa) * 70 * esm, t: 0, life: 2, r: 50, hops: 3, follow: false, vx: Math.cos(aa) * 120, vy: Math.sin(aa) * 120, sucked: 0 }); }
+      abProc();
+    }
+    if (ab.t.splitCd > 0) ab.t.splitCd -= dt;
+    for (i = ab.tornados.length - 1; i >= 0; i--) {
+      tw = ab.tornados[i]; tw.t += dt;
+      if (tw.follow && !tw.hopTo) { var fp = mouthPoint(110 * esm); tw.x += (fp.x - tw.x) * (1 - Math.exp(-dt * 5)); tw.y += (fp.y - tw.y) * (1 - Math.exp(-dt * 5)); }
+      if (tw.vx) { tw.x += tw.vx * esm * dt; tw.y += tw.vy * esm * dt; }
+      if (tw.hopTo) { var hk = Math.min(1, (tw.t - tw.hopT0) / 0.35); tw.x = tw.hx + (tw.hopTo.x - tw.hx) * hk; tw.y = tw.hy + (tw.hopTo.y - tw.hy) * hk; if (hk >= 1) tw.hopTo = null; }
+      var got = 0;
+      for (j = 0; j < mice.length; j++) {
+        m = mice[j]; if (m.hidden || m.carried) continue;
+        var d = distance(m.x, m.y, tw.x, tw.y);
+        if (d < tw.r * esm) { if (!(m.stun > 0)) { stunM(m, 2, "spin"); got++; tw.sucked++; } pullM(m, tw.x, tw.y, 120 * esm, 0.2); }
+      }
+      if (S >= 3 && tw.sucked > 0 && tw.hops < 3 && !tw.hopTo && tw.t > 0.8) { // 连锁跳
+        var nx = nearestMice(tw.x, tw.y, 260 * esm, 1, function (q) { return !(q.stun > 0) && distance(q.x, q.y, tw.x, tw.y) > tw.r * esm; })[0];
+        if (nx) { tw.hops++; tw.sucked = 0; tw.follow = false; tw.hx = tw.x; tw.hy = tw.y; tw.hopTo = { x: nx.x, y: nx.y }; tw.hopT0 = tw.t; tw.life = tw.t + 1.6; fx("hop", tw.x, tw.y, 0.4, { tx: nx.x, ty: nx.y }); }
+      }
+      if (tw.t > tw.life) { ab.tornados.splice(i, 1); if (!tw.vx) ab.t.windCd = 4; }
+    }
+    if (S >= 5 && cdReady("bigroll", 30, dt)) { ab.roll = 3; abProc(); }
+    if (ab.roll > 0) { // 大胖龙卷：团成球滚 3 秒，沿途老鼠卷到嘴边
+      ab.roll -= dt;
+      var big = nearestMice(cat.x, cat.y, 140 * esm, 20);
+      for (i = 0; i < big.length; i++) { stunM(big[i], 0.6, "spin"); pullM(big[i], cat.x, cat.y, 220 * esm, 0.3); }
+    }
+  }
+
+  // ---- 暹罗：歌剧喵 ----
+  function updateOpera(dt, S, esm) {
+    var i, m;
+    if (cdReady("note", 8, dt)) {
+      var tg = nearestMice(cat.x, cat.y, 260 * esm, S >= 2 ? 3 : 1, function (q) { return !(q.stun > 0); });
+      var NOTE = ["♪", "♫", "♬"];
+      for (i = 0; i < tg.length; i++) ab.notes.push({ k: "note", ch: NOTE[i % 3], c: ["#ff7a9a", "#7ab8ff", "#ffc24a"][i % 3], x: cat.x, y: cat.y - 20 * esm, tgt: tg[i], v: 300 });
+      if (tg.length) { abProc(); fx("sing", cat.x, cat.y, 0.6, {}); }
+    }
+    updateProjectiles(dt, esm, function (m) { stunM(m, 2, "dance"); m.danceT = 2; });
+    if (S >= 3) { // 康加舞队：跳舞的老鼠排队朝你走来
+      var dancers = mice.filter(function (q) { return q.stunKind === "dance" && q.stun > 0 && !q.hidden; });
+      for (i = 0; i < dancers.length; i++) {
+        var slot = mouthPoint((50 + i * 22) * esm);
+        pullM(dancers[i], slot.x, slot.y, 55 * esm, 0.2);
+      }
+    }
+    if (S >= 4 && cdReady("spot", 20, dt)) {
+      var fm = freeMice(), best = null, bestN = 0;
+      for (i = 0; i < fm.length; i++) { if (distance(fm[i].x, fm[i].y, cat.x, cat.y) > 360 * esm) continue; var nb = nearestMice(fm[i].x, fm[i].y, 100 * esm, 10); if (nb.length > bestN) { bestN = nb.length; best = fm[i]; } }
+      if (best) {
+        var bow = nearestMice(best.x, best.y, 100 * esm, 10);
+        for (i = 0; i < bow.length; i++) stunM(bow[i], 2.5, "bow");
+        ab.spot = { x: best.x, y: best.y, t: 2.5, r: 100 * esm }; abProc();
+      }
+    }
+    if (ab.spot) { ab.spot.t -= dt; if (ab.spot.t <= 0) ab.spot = null; }
+    if (S >= 5 && cdReady("choir", 30, dt)) {
+      var ch = nearestMice(cat.x, cat.y, 320 * esm, 9);
+      for (i = 0; i < ch.length; i++) {
+        var ang = cat.facing - Math.PI / 2 + Math.PI * (ch.length === 1 ? 0.5 : i / (ch.length - 1));
+        pullM(ch[i], cat.x + Math.cos(ang) * 90 * esm, cat.y + Math.sin(ang) * 90 * esm, 260 * esm, 1.2);
+        stunM(ch[i], 3, "sing");
+      }
+      fx("choir", cat.x, cat.y, 3, {}); abProc();
+    }
+  }
+
+  function updateProjectiles(dt, esm, onHit) {
+    for (var i = ab.notes.length - 1; i >= 0; i--) {
+      var n = ab.notes[i];
+      if (!n.tgt || mice.indexOf(n.tgt) < 0 || n.tgt.hidden) { ab.notes.splice(i, 1); continue; }
+      var d = distance(n.x, n.y, n.tgt.x, n.tgt.y), dv = normalize(n.tgt.x - n.x, n.tgt.y - n.y), st = n.v * esm * dt;
+      if (d <= st + 6) { onHit(n.tgt); fx(n.k === "snow" ? "burst" : "bang", n.tgt.x, n.tgt.y, 0.4, { r: 20 * esm }); ab.notes.splice(i, 1); continue; }
+      n.x += dv.x * st; n.y += dv.y * st;
+    }
+  }
+
+  // 在 updateMice 里、位移之前调用：技能对老鼠的影响
+  function applyAbilityToMouse(m, dt) {
+    if (m.carried) { m.vx = 0; m.vy = 0; m.carryFrame = true; return; }
+    if (m.stun > 0) { m.stun -= dt; m.vx = 0; m.vy = 0; if (m.stun <= 0) m.stunKind = null; }
+    else if (m.lureX != null && m.state !== "flee") { var lv = normalize(m.lureX - m.x, m.lureY - m.y); m.vx = lv.x * m.speed * 0.6; m.vy = lv.y * m.speed * 0.6; }
+    m.lureX = null; m.lureY = null;
+    if (m.pullT > 0) {
+      m.pullT -= dt;
+      var d = distance(m.x, m.y, m.pullX, m.pullY);
+      if (d > 3) { var pv = normalize(m.pullX - m.x, m.pullY - m.y), sp = Math.min(m.pullV, d / Math.max(dt, 1e-3)); m.vx = pv.x * sp; m.vy = pv.y * sp; }
+      else { m.vx = 0; m.vy = 0; }
+    }
+  }
+
+  // ---- 技能画面（全部是叠加层/独立小物件，8 个方向通用） ----
+  function SX(x) { return worldToScreenX(x); }
+  function SY(y) { return worldToScreenY(y); }
+  function emojiAt(ch, x, y, size, alpha) {
+    ctx.globalAlpha = alpha == null ? 1 : alpha; ctx.font = Math.round(size) + "px sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.fillText(ch, x, y); ctx.textBaseline = "alphabetic"; ctx.globalAlpha = 1;
   }
   function drawAbilityGround() {
     if (!ab) return;
-    var sc = s(1) * entityScaleMult, i;
-    if (ab.kind === "paw") {
-      for (i = 0; i < ab.prints.length; i++) {
-        var p = ab.prints[i], al = Math.min(1, p.age / 0.15) * (1 - Math.max(0, p.age - AB_PRINT_LIFE + 1));
-        drawPaw(worldToScreenX(p.x), worldToScreenY(p.y), p.a, sc, 0.75 * al);
-      }
-    } else if (ab.kind === "yarn") {
-      var yx = worldToScreenX(ab.yarn.x), yy = worldToScreenY(ab.yarn.y);
-      var cx = worldToScreenX(cat.x), cy = worldToScreenY(cat.y) + s(cat.r) * 0.6;
-      ctx.strokeStyle = "#ff8fb1"; ctx.lineWidth = Math.max(1.5, 1.6 * sc); ctx.beginPath();
-      ctx.moveTo(cx, cy); ctx.quadraticCurveTo((cx + yx) / 2, Math.max(cy, yy) + 14 * sc, yx, yy + 4 * sc); ctx.stroke();
-    } else if (ab.kind === "sneeze" && ab.sneeze.anim > 0) {
-      var k = 1 - ab.sneeze.anim / 0.9;
-      ctx.strokeStyle = "rgba(255,255,255," + (0.8 * (1 - k)) + ")"; ctx.lineWidth = 4 * sc;
-      ctx.beginPath(); ctx.arc(worldToScreenX(ab.sneeze.x), worldToScreenY(ab.sneeze.y), s(AB_SNEEZE_R * entityScaleMult) * Math.min(1, k * 1.6), 0, Math.PI * 2); ctx.stroke();
+    var sc = s(1) * entityScaleMult, i, f;
+    for (i = 0; i < ab.fx.length; i++) {
+      f = ab.fx[i];
+      if (f.k === "ice") { ctx.globalAlpha = 0.55 * (1 - f.age / f.life); ctx.fillStyle = "#cfefff"; ctx.beginPath(); ctx.ellipse(SX(f.x), SY(f.y) + 8 * sc, 14 * sc, 7 * sc, 0, 0, Math.PI * 2); ctx.fill(); ctx.globalAlpha = 1; }
+    }
+    for (i = 0; i < ab.webs.length; i++) {
+      var w = ab.webs[i], al = Math.min(1, (w.life - w.t) / 1);
+      ctx.strokeStyle = "rgba(255,143,177," + (0.8 * al) + ")"; ctx.lineWidth = 2 * sc;
+      var x1 = SX(w.x1), y1 = SY(w.y1), x2 = SX(w.x2), y2 = SY(w.y2), nx = -(y2 - y1), ny = x2 - x1, L = Math.sqrt(nx * nx + ny * ny) || 1;
+      nx /= L; ny /= L;
+      for (var k = -2; k <= 2; k++) { ctx.beginPath(); ctx.moveTo(x1 + nx * k * 6 * sc, y1 + ny * k * 6 * sc); ctx.lineTo(x2 + nx * k * 6 * sc, y2 + ny * k * 6 * sc); ctx.stroke(); }
+      for (var q = 0; q <= 8; q++) { var u = q / 8; ctx.beginPath(); ctx.moveTo(x1 + (x2 - x1) * u - nx * 12 * sc, y1 + (y2 - y1) * u - ny * 12 * sc); ctx.lineTo(x1 + (x2 - x1) * u + nx * 12 * sc, y1 + (y2 - y1) * u + ny * 12 * sc); ctx.stroke(); }
+    }
+    if (ab.spot) {
+      var sp = ab.spot, g = ctx.createRadialGradient(SX(sp.x), SY(sp.y), 0, SX(sp.x), SY(sp.y), s(sp.r));
+      g.addColorStop(0, "rgba(255,240,150,.6)"); g.addColorStop(1, "rgba(255,240,150,0)");
+      ctx.fillStyle = g; ctx.beginPath(); ctx.arc(SX(sp.x), SY(sp.y), s(sp.r), 0, Math.PI * 2); ctx.fill();
+    }
+    for (i = 0; i < ab.boxes.length; i++) if (ab.boxes[i].belt) {
+      var b = ab.boxes[i], dv = normalize(cat.x - b.x, cat.y - b.y);
+      ctx.strokeStyle = "rgba(90,90,110,.5)"; ctx.lineWidth = 10 * sc; ctx.lineCap = "round";
+      ctx.beginPath(); ctx.moveTo(SX(b.x), SY(b.y) + 10 * sc); ctx.lineTo(SX(b.x + dv.x * 60), SY(b.y + dv.y * 60) + 10 * sc); ctx.stroke();
+      ctx.strokeStyle = "rgba(255,255,255,.6)"; ctx.lineWidth = 2 * sc; ctx.setLineDash([4 * sc, 6 * sc]); ctx.lineDashOffset = -elapsedPlayTime * 30;
+      ctx.beginPath(); ctx.moveTo(SX(b.x), SY(b.y) + 10 * sc); ctx.lineTo(SX(b.x + dv.x * 60), SY(b.y + dv.y * 60) + 10 * sc); ctx.stroke(); ctx.setLineDash([]);
     }
   }
   function drawAbilityBehindCat() {
     if (!ab) return;
-    if (ab.kind === "shadow" && ab.shadow.on) {
-      var sh = ab.shadow;
-      var shx = worldToScreenX(sh.x), shy = worldToScreenY(sh.y), shr = s(cat.r);
-      ctx.fillStyle = "rgba(150,90,220,.28)"; ctx.beginPath(); ctx.ellipse(shx, shy + shr * 1.2, shr * 1.6, shr * 0.5, 0, 0, Math.PI * 2); ctx.fill();
-      ctx.save(); ctx.globalAlpha = 0.45;
-      drawCatAt(worldToScreenX(sh.x), worldToScreenY(sh.y), s(cat.r), sh.anim, sh.cycle, "black", true);
-      ctx.restore();
+    var sc = s(1) * entityScaleMult, i;
+    for (i = 0; i < ab.boxes.length; i++) {
+      var b = ab.boxes[i], x = SX(b.x), y = SY(b.y), sh = b.shake > 0 ? Math.sin(elapsedPlayTime * 60) * 2 * sc : 0;
+      shadow(x, y + 14 * sc, 18 * sc);
+      ctx.fillStyle = "#e8b77a"; ctx.strokeStyle = "#a8743c"; ctx.lineWidth = 2 * sc;
+      ctx.beginPath(); ctx.roundRect(x - 16 * sc + sh, y - 10 * sc, 32 * sc, 24 * sc, 4 * sc); ctx.fill(); ctx.stroke();
+      if (b.closed) { ctx.fillStyle = "#d9a466"; ctx.beginPath(); ctx.roundRect(x - 18 * sc + sh, y - 15 * sc, 36 * sc, 7 * sc, 3 * sc); ctx.fill(); ctx.stroke(); }
+      else { ctx.fillStyle = "#5a3a20"; ctx.fillRect(x - 12 * sc + sh, y - 9 * sc, 24 * sc, 5 * sc); ctx.fillStyle = "#d9a466"; ctx.beginPath(); ctx.moveTo(x - 16 * sc, y - 10 * sc); ctx.lineTo(x - 24 * sc, y - 20 * sc); ctx.lineTo(x - 12 * sc, y - 18 * sc); ctx.closePath(); ctx.fill(); ctx.stroke(); }
+      if (b.mice.length) {
+        ctx.strokeStyle = "#ff8fb1"; ctx.lineWidth = 2 * sc; ctx.beginPath(); ctx.moveTo(x + 16 * sc, y + 6 * sc); ctx.quadraticCurveTo(x + 26 * sc, y + 2 * sc, x + 24 * sc, y - 6 * sc + Math.sin(elapsedPlayTime * 8) * 3 * sc); ctx.stroke();
+        ctx.font = "900 " + Math.round(11 * sc) + "px sans-serif"; ctx.textAlign = "center"; ctx.fillStyle = "#fff"; ctx.strokeStyle = "#7a4a2a"; ctx.lineWidth = 3;
+        var lbl = (b.closed ? "?" : "") + "×" + b.mice.length; ctx.strokeText(lbl, x, y - 20 * sc); ctx.fillText(lbl, x, y - 20 * sc);
+      }
+    }
+    for (i = 0; i < ab.snowmen.length; i++) {
+      var sm = ab.snowmen[i], sx = SX(sm.x), sy = SY(sm.y);
+      shadow(sx, sy + 16 * sc, 14 * sc);
+      ART.ellipse(ctx, sx, sy + 6 * sc, 13 * sc, 12 * sc, "#ffffff", "#bcd8ee", 1.5 * sc);
+      ART.ellipse(ctx, sx, sy - 12 * sc, 9 * sc, 9 * sc, "#ffffff", "#bcd8ee", 1.5 * sc);
+      ctx.fillStyle = "#333"; ctx.beginPath(); ctx.arc(sx - 3 * sc, sy - 14 * sc, 1.4 * sc, 0, 7); ctx.arc(sx + 3 * sc, sy - 14 * sc, 1.4 * sc, 0, 7); ctx.fill();
+      ctx.fillStyle = "#ff8a3d"; ctx.beginPath(); ctx.moveTo(sx, sy - 11 * sc); ctx.lineTo(sx + 8 * sc, sy - 10 * sc); ctx.lineTo(sx, sy - 9 * sc); ctx.fill();
+    }
+    for (i = 0; i < ab.balls.length; i++) {
+      var bl = ab.balls[i], r = bl.r * sc, bx = SX(bl.x), by = SY(bl.y);
+      shadow(bx, by + r, r);
+      ART.ellipse(ctx, bx, by, r, r, "#ffffff", "#a9cfee", 1.6 * sc);
+      ctx.strokeStyle = "rgba(169,207,238,.8)"; ctx.lineWidth = 1.2 * sc; ctx.beginPath(); ctx.arc(bx, by, r * 0.6, bl.rot, bl.rot + 2); ctx.stroke();
+      for (var t2 = 0; t2 < bl.mice.length; t2++) { var ta = bl.rot + t2 * 2.2; ctx.strokeStyle = "#ff9ab0"; ctx.beginPath(); ctx.moveTo(bx + Math.cos(ta) * r, by + Math.sin(ta) * r); ctx.lineTo(bx + Math.cos(ta) * (r + 7 * sc), by + Math.sin(ta) * (r + 7 * sc)); ctx.stroke(); }
+    }
+    for (i = 0; i < ab.tornados.length; i++) {
+      var tw = ab.tornados[i], tx = SX(tw.x), ty = SY(tw.y), rr = tw.r * sc, al = Math.min(1, tw.t * 3, (tw.life - tw.t) * 2);
+      ctx.globalAlpha = 0.75 * Math.max(0, al);
+      for (var ly = 0; ly < 5; ly++) {
+        var w2 = rr * (0.35 + ly * 0.16), yy = ty + 14 * sc - ly * 9 * sc, ph = elapsedPlayTime * 9 + ly;
+        ctx.strokeStyle = ly % 2 ? "#b7c6dc" : "#e8eef7"; ctx.lineWidth = 3 * sc;
+        ctx.beginPath(); ctx.ellipse(tx + Math.sin(ph) * 4 * sc, yy, w2, w2 * 0.28, 0, ph % 6.28, ph % 6.28 + 4.4); ctx.stroke();
+      }
       ctx.globalAlpha = 1;
-    } else if (ab.kind === "yarn") {
-      var sc = s(1) * entityScaleMult, r = AB_YARN_R * sc;
-      var x = worldToScreenX(ab.yarn.x), y = worldToScreenY(ab.yarn.y);
-      shadow(x, y + r * 0.95, r * 0.95);
-      ctx.save(); ctx.translate(x, y);
-      ctx.fillStyle = "#ff9fc0"; ctx.strokeStyle = "#e0668f"; ctx.lineWidth = Math.max(1.5, 1.8 * sc);
-      ctx.beginPath(); ctx.arc(0, 0, r, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
-      ctx.save(); ctx.beginPath(); ctx.arc(0, 0, r, 0, Math.PI * 2); ctx.clip(); ctx.rotate(ab.yarn.rot);
-      for (var j = -2; j <= 2; j++) { ctx.beginPath(); ctx.ellipse(j * r * 0.38, 0, r * 0.25, r * 1.1, 0.5, 0, Math.PI * 2); ctx.stroke(); }
-      ctx.restore();
-      ctx.fillStyle = "rgba(255,255,255,.55)"; ctx.beginPath(); ctx.arc(-r * 0.35, -r * 0.4, r * 0.25, 0, Math.PI * 2); ctx.fill();
-      ctx.restore();
+    }
+    for (i = 0; i < ab.kittens.length; i++) {
+      var k = ab.kittens[i];
+      drawCatAt(SX(k.x), SY(k.y), s(cat.r) * 0.55, k.anim, k.cycle, "orange", true);
+      if (k.mode === "carry" && k.target) { /* 被叼的老鼠由 drawMice 照常绘制在小猫嘴边 */ }
+    }
+    if (ab.roll > 0) {
+      var cx = SX(cat.x), cy = SY(cat.y), R = s(140 * entityScaleMult);
+      ctx.strokeStyle = "rgba(180,200,230,.55)"; ctx.lineWidth = 6 * sc;
+      for (var z = 0; z < 3; z++) { ctx.beginPath(); ctx.arc(cx, cy, R * (0.4 + z * 0.25), elapsedPlayTime * 6 + z, elapsedPlayTime * 6 + z + 3.5); ctx.stroke(); }
     }
   }
+  var STUN_ICON = { pin: "💢", ice: "", web: "🕸", spin: "💫", dance: "🎵", bow: "🙇", sing: "🎶", rope: "", dizzy: "💫" };
   function drawAbilityOverlay() {
     if (!ab) return;
-    var sc = s(1) * entityScaleMult, i, m, cx = worldToScreenX(cat.x), cy = worldToScreenY(cat.y);
-    // 老鼠身上的状态
+    var sc = s(1) * entityScaleMult, i, m, cx = SX(cat.x), cy = SY(cat.y);
     for (i = 0; i < mice.length; i++) {
-      m = mice[i];
-      var mx = worldToScreenX(m.x), my = worldToScreenY(m.y);
+      m = mice[i]; if (m.hidden || !(m.stun > 0)) continue;
+      var mx = SX(m.x), my = SY(m.y);
       if (mx < -60 || mx > W + 60 || my < -60 || my > H + 60) continue;
-      if (m.slip > 0) {
-        for (var q = 0; q < 3; q++) { var aa = elapsedPlayTime * 8 + q * 2.1; ART.star(ctx, mx + Math.cos(aa) * 12 * sc, my - 26 * sc + Math.sin(aa) * 4 * sc, 4 * sc, "#ffd84a"); }
-      }
-      if (m.tangle > 0) {
-        ctx.strokeStyle = "#ff8fb1"; ctx.lineWidth = Math.max(1.5, 2 * sc);
-        for (var z = 0; z < 3; z++) { ctx.beginPath(); ctx.ellipse(mx, my - 2 * sc + z * 5 * sc, m.r * s(1) * 1.1, 4 * sc, 0.3 * (z - 1), 0, Math.PI * 2); ctx.stroke(); }
-      }
-      if (m.stun > 0) {
-        ctx.font = "900 " + Math.round(16 * sc) + "px sans-serif"; ctx.textAlign = "center";
-        ctx.lineWidth = 3; ctx.strokeStyle = "#fff"; ctx.strokeText("!", mx, my - 26 * sc); ctx.fillStyle = "#ff5a5a"; ctx.fillText("!", mx, my - 26 * sc);
+      if (m.stunKind === "ice") { ctx.fillStyle = "rgba(190,230,255,.55)"; ctx.strokeStyle = "rgba(255,255,255,.9)"; ctx.lineWidth = 1.5 * sc; ctx.beginPath(); ctx.roundRect(mx - 16 * sc, my - 18 * sc, 32 * sc, 30 * sc, 6 * sc); ctx.fill(); ctx.stroke(); }
+      else if (m.stunKind === "rope") { ctx.strokeStyle = "#ff8fb1"; ctx.lineWidth = 2 * sc; ctx.beginPath(); ctx.ellipse(mx, my, 14 * sc, 6 * sc, 0, 0, 7); ctx.stroke(); }
+      var ic = STUN_ICON[m.stunKind];
+      if (ic) emojiAt(ic, mx + (m.stunKind === "dance" ? Math.sin(elapsedPlayTime * 10) * 5 * sc : 0), my - 26 * sc, 13 * sc);
+    }
+    for (i = 0; i < ab.notes.length; i++) {
+      var n = ab.notes[i];
+      if (n.k === "note") { ctx.font = "900 " + Math.round(20 * sc) + "px sans-serif"; ctx.textAlign = "center"; ctx.lineWidth = 3; ctx.strokeStyle = "#fff"; ctx.strokeText(n.ch, SX(n.x), SY(n.y)); ctx.fillStyle = n.c; ctx.fillText(n.ch, SX(n.x), SY(n.y)); }
+      else ART.ellipse(ctx, SX(n.x), SY(n.y), 5 * sc, 5 * sc, "#fff", "#a9cfee", 1.2 * sc);
+    }
+    for (i = 0; i < ab.fx.length; i++) {
+      var f = ab.fx[i], k = f.age / f.life, fx0 = SX(f.x), fy0 = SY(f.y), a = 1 - k;
+      if (f.k === "lasso" && f.m && mice.indexOf(f.m) >= 0) {
+        ctx.strokeStyle = f.c; ctx.lineWidth = 2.5 * sc; ctx.globalAlpha = a; ctx.beginPath(); ctx.moveTo(cx, cy); ctx.quadraticCurveTo((cx + SX(f.m.x)) / 2, Math.min(cy, SY(f.m.y)) - 30 * sc, SX(f.m.x), SY(f.m.y)); ctx.stroke(); ctx.globalAlpha = 1;
+      } else if (f.k === "arc" || f.k === "hop") {
+        ctx.strokeStyle = "rgba(255,180,90," + a + ")"; ctx.lineWidth = 2 * sc; ctx.setLineDash([5 * sc, 5 * sc]);
+        ctx.beginPath(); ctx.moveTo(fx0, fy0); ctx.quadraticCurveTo((fx0 + SX(f.tx)) / 2, Math.min(fy0, SY(f.ty)) - 40 * sc, SX(f.tx), SY(f.ty)); ctx.stroke(); ctx.setLineDash([]);
+      } else if (f.k === "bang") emojiAt("💥", fx0, fy0 - 10 * sc, 18 * sc * (0.8 + k * 0.4), a);
+      else if (f.k === "ring" || f.k === "burst" || f.k === "blizzard" || f.k === "star") {
+        var R = s(f.r || 60) * (f.k === "ring" ? 1 : Math.min(1, k * 1.6));
+        ctx.strokeStyle = f.k === "star" ? "rgba(255,143,177," + a + ")" : f.k === "ring" ? "rgba(200,150,90," + a + ")" : "rgba(170,220,255," + a + ")";
+        ctx.lineWidth = 4 * sc;
+        if (f.k === "star") { ctx.beginPath(); for (var p = 0; p <= 10; p++) { var an = -Math.PI / 2 + p * Math.PI / 5, rad = p % 2 ? R * 0.45 : R; var px = fx0 + Math.cos(an) * rad, py = fy0 + Math.sin(an) * rad; if (p) ctx.lineTo(px, py); else ctx.moveTo(px, py); } ctx.stroke(); }
+        else { ctx.beginPath(); ctx.arc(fx0, fy0, R, 0, Math.PI * 2); ctx.stroke(); }
+        if (f.k === "blizzard") for (var q = 0; q < 14; q++) emojiAt("❄", fx0 + Math.cos(q * 0.45 + k * 4) * R, fy0 + Math.sin(q * 0.45 + k * 4) * R, 12 * sc, a);
+      } else if (f.k === "confetti") { for (var c2 = 0; c2 < 10; c2++) { ctx.fillStyle = ["#ff7a9a", "#ffd84a", "#7ab8ff", "#8fd16a"][c2 % 4]; ctx.globalAlpha = a; ctx.fillRect(fx0 + Math.cos(c2 * 0.63) * 40 * k * sc, fy0 - 30 * k * sc + Math.sin(c2 * 0.63) * 30 * k * sc, 4 * sc, 7 * sc); } ctx.globalAlpha = 1; }
+      else if (f.k === "hat") emojiAt("🎩", cx, cy - 46 * sc - Math.sin(k * Math.PI) * 8 * sc, 22 * sc, a);
+      else if (f.k === "toot") emojiAt("嘟嘟~", cx, cy - 50 * sc, 14 * sc, a);
+      else if (f.k === "sing") emojiAt("♪", cx + 16 * sc, cy - 44 * sc - k * 10 * sc, 18 * sc, a);
+      else if (f.k === "choir") emojiAt("🎤", cx + 18 * sc, cy - 40 * sc, 18 * sc, Math.min(1, a * 3));
+      else if (f.k === "tunnel") { ctx.fillStyle = "rgba(40,30,50," + (0.6 * a) + ")"; ctx.beginPath(); ctx.ellipse(fx0, fy0 + 10 * sc, 22 * sc * (0.5 + k), 8 * sc * (0.5 + k), 0, 0, 7); ctx.fill(); }
+      else if (f.k === "evo") {
+        for (var e = 0; e < 10; e++) { var ea = e / 10 * Math.PI * 2 + k * 2; ART.star(ctx, cx + Math.cos(ea) * 50 * sc * (0.6 + k), cy + 10 * sc + Math.sin(ea) * 26 * sc * (0.6 + k), (e % 2 ? 6 : 9) * sc, e % 3 ? "#ffd84a" : "#ff9ab0"); }
+        var lv = skillOf(ab.skin).lv[ab.stage - 1];
+        var pop = k < 0.15 ? k / 0.15 : 1;
+        ctx.globalAlpha = Math.min(1, a * 2);
+        ctx.fillStyle = "#ff7a3d"; ctx.strokeStyle = "#fff"; ctx.lineWidth = 3;
+        ctx.beginPath(); ctx.roundRect(cx - 34 * sc * pop, cy - 92 * sc, 68 * sc * pop, 28 * sc, 14 * sc); ctx.fill(); ctx.stroke();
+        ctx.font = "900 " + Math.round(15 * sc * pop) + "px sans-serif"; ctx.textAlign = "center"; ctx.fillStyle = "#fff"; ctx.fillText(lv[0] + " Lv" + ab.stage, cx, cy - 73 * sc);
+        ctx.globalAlpha = 1;
       }
     }
-    if (ab.kind === "tail" && ab.tail.swish > 0) {
-      var k = 1 - ab.tail.swish / 0.35, R = s(AB_TAIL_R * entityScaleMult) * 0.8, back = ab.tail.dir + Math.PI;
-      ctx.strokeStyle = "rgba(255,190,120," + (0.85 * (1 - k)) + ")"; ctx.lineWidth = 7 * sc; ctx.lineCap = "round";
-      ctx.beginPath(); ctx.arc(cx, cy, R, back - 1.6 + k * 1.2, back + 0.4 + k * 1.2); ctx.stroke();
-      ctx.lineWidth = 3 * sc; ctx.strokeStyle = "rgba(255,255,255," + (0.7 * (1 - k)) + ")";
-      ctx.beginPath(); ctx.arc(cx, cy, R * 0.82, back - 1.2 + k * 1.2, back + 0.2 + k * 1.2); ctx.stroke();
-    } else if (ab.kind === "wind") {
-      var w = ab.wind;
-      for (i = 0; i < w.leaves.length; i++) {
-        var lf = w.leaves[i];
-        ctx.save(); ctx.translate(worldToScreenX(lf.x), worldToScreenY(lf.y)); ctx.rotate(lf.rot);
-        ctx.globalAlpha = 1 - lf.age / lf.life; ctx.fillStyle = lf.c;
-        ctx.beginPath(); ctx.ellipse(0, 0, 6 * sc, 3 * sc, 0, 0, Math.PI * 2); ctx.fill();
-        ctx.strokeStyle = "rgba(80,120,40,.6)"; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(-5 * sc, 0); ctx.lineTo(5 * sc, 0); ctx.stroke();
-        ctx.restore();
-      }
-      if (w.on) {
-        ctx.strokeStyle = "rgba(255,255,255,.55)"; ctx.lineWidth = 2.5 * sc; ctx.lineCap = "round";
-        var f = cat.facing, ph = (elapsedPlayTime * 3) % 1;
-        for (var sd = -1; sd <= 1; sd += 2) for (var n = 0; n < 2; n++) {
-          var off = (55 + n * 40) * sc * sd, al = 40 * sc, st = (ph + n * 0.5) % 1 * 80 * sc;
-          var bx = cx - Math.sin(f) * off + Math.cos(f) * (st - 20 * sc), by = cy + Math.cos(f) * off + Math.sin(f) * (st - 20 * sc);
-          ctx.beginPath(); ctx.moveTo(bx, by); ctx.quadraticCurveTo(bx + Math.cos(f) * al * 0.5 + Math.sin(f) * sd * 8 * sc, by + Math.sin(f) * al * 0.5 - Math.cos(f) * sd * 8 * sc, bx + Math.cos(f) * al, by + Math.sin(f) * al); ctx.stroke();
-        }
-      }
-    } else if (ab.kind === "sneeze" && ab.sneeze.anim > 0) {
-      var t2 = ab.sneeze.anim, pop = t2 > 0.75 ? (0.9 - t2) / 0.15 : 1;
-      ctx.globalAlpha = Math.min(1, t2 / 0.3);
-      var bx2 = cx + 26 * sc, by2 = cy - 52 * sc;
-      ctx.fillStyle = "#fff"; ctx.strokeStyle = "#8fc8ff"; ctx.lineWidth = 2.5 * sc;
-      ctx.beginPath(); ctx.ellipse(bx2, by2, 30 * sc * pop, 15 * sc * pop, 0, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
-      ctx.font = "900 " + Math.round(14 * sc * pop) + "px sans-serif"; ctx.textAlign = "center"; ctx.fillStyle = "#4a8fd8";
-      ctx.fillText("哈啾!", bx2, by2 + 5 * sc * pop);
-      for (i = 0; i < 5; i++) { ctx.fillStyle = "rgba(200,230,255,.8)"; ctx.beginPath(); ctx.arc(cx + Math.cos(i * 1.3) * (1 - t2) * 60 * sc, cy - 10 * sc + Math.sin(i * 1.3) * (1 - t2) * 40 * sc, 3 * sc, 0, Math.PI * 2); ctx.fill(); }
-      ctx.globalAlpha = 1;
+  }
+  // 进化时小猫原地小跳（绘制偏移，不改位置/碰撞）
+  function evoHop() { return ab && ab.evoT > 0 ? -Math.sin((1 - ab.evoT) * Math.PI * 2) * Math.max(0, ab.evoT - 0.5) * 2 * 14 : 0; }
+
+  // ---- HUD 技能徽章 / 进化横幅 ----
+  function updateSkillBadge(flip) {
+    if (!ab || !dom.abilityBadge) return;
+    var k = skillOf(ab.skin), st = ab.stage, lv = k.lv[st - 1];
+    var lo = STAGE_AT[st - 1], hi = st < 5 ? STAGE_AT[st] : null;
+    var pct = hi ? Math.round(100 * (catches - lo) / (hi - lo)) : 100;
+    var key = st + "|" + pct + "|" + catches;
+    if (dom.abilityBadge.dataset.key === key && !flip) return;
+    dom.abilityBadge.dataset.key = key;
+    if (!dom.abilityBadge.firstChild || flip) {
+      dom.abilityBadge.innerHTML = '<span class="ab-ic"></span><span class="ab-txt"><b class="ab-lv"></b><span class="ab-name"></span><i class="ab-bar"><i></i></i><small class="ab-prog"></small></span>';
     }
+    var q = function (c) { return dom.abilityBadge.querySelector(c); };
+    setText(q(".ab-ic"), lv[0]); setText(q(".ab-lv"), "Lv" + st); setText(q(".ab-name"), lv[1]);
+    q(".ab-bar > i").style.width = pct + "%";
+    setText(q(".ab-prog"), hi ? (catches + " / " + hi + " → Lv" + (st + 1)) : "MAX");
+    toggleCls(dom.abilityBadge, "max", !hi);
+    if (flip) { dom.abilityBadge.classList.remove("evo"); void dom.abilityBadge.offsetWidth; dom.abilityBadge.classList.add("evo"); }
+  }
+  var evoTimer = null;
+  function showEvoBanner(title, sub) {
+    var el = document.getElementById("evoBanner");
+    if (!el) return;
+    el.innerHTML = "<b></b><span></span>"; el.firstChild.textContent = title; el.lastChild.textContent = sub;
+    el.classList.remove("hidden", "show"); void el.offsetWidth; el.classList.add("show");
+    clearTimeout(evoTimer); evoTimer = setTimeout(function () { el.classList.remove("show"); el.classList.add("hidden"); }, 2000);
   }
 
   // =======================================================================
@@ -1461,12 +1766,13 @@
   }
 
   function drawCat() {
-    drawCatAt(worldToScreenX(cat.x), worldToScreenY(cat.y) - 0, s(cat.r), catAnim, cat.runCycle, currentSkin);
+    drawCatAt(worldToScreenX(cat.x), worldToScreenY(cat.y) + s(evoHop()), s(cat.r), catAnim, cat.runCycle, currentSkin);
   }
 
   function drawMice() {
     for (var i = 0; i < mice.length; i++) {
       var m = mice[i];
+      if (m.hidden) continue;
       var sx = worldToScreenX(m.x), sy = worldToScreenY(m.y);
       if (sx < -60 || sx > W + 60 || sy < -60 || sy > H + 60) continue;
       if (!m.anim) m.anim = newAnim();
@@ -2055,8 +2361,7 @@
     resetWorld();
     resetScoring();
     resetAbilities();
-    var abi = abilityOf(currentSkin);
-    dom.abilityBadge.innerHTML = '<span class="ab-ic">' + abi.icon + '</span>' + abi.name;
+    dom.abilityBadge.dataset.key = ""; updateSkillBadge(true);
     dom.comboText.classList.add("hidden");
     setText(dom.rankText, "排名：--");
     state = STATE_PLAY;
@@ -2189,7 +2494,7 @@
 
   function updateHud() {
     setText(dom.scoreText, score);
-    if (ab) dom.abilityBadge.classList.toggle("flash", ab.flash > 0);
+    if (ab) { toggleCls(dom.abilityBadge, "flash", ab.flash > 0); updateSkillBadge(false); }
     if (combo >= 2) {
       dom.comboText.classList.remove("hidden");
       setText(dom.comboText, "连击 x" + combo);
@@ -2297,8 +2602,10 @@
     var k = window.CatArt.skinOf(id);
     skinNameEl.textContent = k.name;
     skinDescEl.textContent = k.desc;
-    var abi = abilityOf(id);
-    skinAbilityEl.innerHTML = '<b>' + abi.icon + ' ' + abi.name + '</b><span>' + abi.desc + '</span>';
+    var sk = skillOf(id);
+    var html = '<b>' + sk.icon + ' ' + sk.name + '</b><span class="evo-row">';
+    for (var li = 0; li < sk.lv.length; li++) html += '<span class="evo-step" title="' + sk.lv[li][1] + '：' + sk.lv[li][2] + '"><em>' + sk.lv[li][0] + '</em>Lv' + (li + 1) + '</span>';
+    skinAbilityEl.innerHTML = html + '</span><span class="evo-desc">Lv1 ' + sk.lv[0][1] + '：' + sk.lv[0][2] + ' · 抓 15/40/80/150 只依次进化</span>';
     for (var i = 0; i < skinCards.length; i++) {
       var on = skinCards[i].dataset.skin === id;
       skinCards[i].classList.toggle("selected", on);
@@ -2315,7 +2622,7 @@
     var cv = document.createElement("canvas");
     b.appendChild(cv);
     var label = document.createElement("div");
-    label.textContent = abilityOf(k.id).icon + k.name;
+    label.textContent = skillOf(k.id).icon + k.name;
     b.appendChild(label);
     b.addEventListener("click", function () { selectSkin(k.id); });
     skinGrid.appendChild(b);
@@ -2383,12 +2690,16 @@
     get skin() { return currentSkin; },
     get ability() {
       if (!ab) return null;
-      return { kind: ab.kind, procs: ab.procs, prints: ab.prints.length, shadow: ab.shadow.on ? { x: ab.shadow.x, y: ab.shadow.y } : null,
-        yarn: { x: ab.yarn.x, y: ab.yarn.y }, windOn: ab.wind.on, sneezeIn: ab.sneeze.next - ab.sneeze.t,
-        mice: mice.map(function (m) { return { slip: m.slip > 0, tangle: m.tangle > 0, stun: m.stun > 0 }; }) };
+      return { skin: ab.skin, stage: ab.stage, procs: ab.procs, kittens: ab.kittens.length, boxes: ab.boxes.map(function (b) { return b.mice.length; }),
+        balls: ab.balls.length, snowmen: ab.snowmen.length, webs: ab.webs.length, tornados: ab.tornados.length, notes: ab.notes.length,
+        stunned: mice.filter(function (m) { return m.stun > 0; }).map(function (m) { return m.stunKind; }), hidden: mice.filter(function (m) { return m.hidden; }).length };
     },
-    printSpots: function () { return ab ? ab.prints.map(function (p) { return { dx: p.x - cat.x, dy: p.y - cat.r * 0.6 - cat.y, age: p.age }; }) : []; },
-    forceSneeze: function () { if (ab) ab.sneeze.t = ab.sneeze.next; },
+    setCatches: function (n) { catches = n; },
+    fireAll: function () { if (ab) for (var k in ab.t) ab.t[k] = 0; },
+    setStraight: function (v) { if (ab) ab.straight = v; },
+    turn: function () { if (ab) ab.turnAcc = Math.PI; },
+    obstaclesNear: function () { return queryNearbyObstacles(cat.x, cat.y).map(function (o) { return { x: o.x - cat.x, y: o.y - cat.y, w: o.w, h: o.h }; }); },
+    teleport: function (x, y) { cat.x = x; cat.y = y; camera.x = x; camera.y = y; },
     setMove: function (x, y) { moveDir.x = x; moveDir.y = y; },
     stepSim: function (sec) { var n = Math.round(sec * 60); for (var i = 0; i < n; i++) update(1 / 60); },
     selectSkin: selectSkin,
