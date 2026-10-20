@@ -69,22 +69,32 @@
     return lerp(ENTITY_MOBILE_SCALE_MULT, 1, t);
   }
 
+  // 画布尺寸以 #app 的实际布局尺寸为准（#app 用 100dvh/fixed inset:0 铺满），
+  // 不再用 innerHeight 写死内联像素——iOS 地址栏收起/展开、横竖屏切换时
+  // innerHeight 与实际可视高度不一致，会在底部留出空白。
+  var appEl = document.getElementById("app") || document.body;
   function resize() {
-    W = window.innerWidth;
-    H = window.innerHeight;
-    DPR = window.devicePixelRatio || 1;
-    canvas.width = Math.round(W * DPR);
-    canvas.height = Math.round(H * DPR);
-    canvas.style.width = W + "px";
-    canvas.style.height = H + "px";
+    var rect = appEl.getBoundingClientRect();
+    var vv = window.visualViewport;
+    W = Math.max(1, Math.ceil(rect.width || (vv ? vv.width : window.innerWidth)));
+    H = Math.max(1, Math.ceil(rect.height || (vv ? vv.height : window.innerHeight)));
+    DPR = Math.min(window.devicePixelRatio || 1, 3);
+    var cw = Math.round(W * DPR), ch = Math.round(H * DPR);
+    if (canvas.width !== cw || canvas.height !== ch) { canvas.width = cw; canvas.height = ch; }
     ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
     SCALE = Math.min(W, H) / REF_W;
     entityScaleMult = computeEntityScaleMult(Math.min(W, H));
   }
 
   window.addEventListener("resize", resize);
-  window.addEventListener("orientationchange", resize);
+  window.addEventListener("orientationchange", function () { resize(); setTimeout(resize, 250); setTimeout(resize, 700); });
+  if (window.visualViewport) window.visualViewport.addEventListener("resize", resize);
+  if (window.ResizeObserver) new ResizeObserver(function () { resize(); }).observe(appEl);
   resize();
+  // 可视区域（世界坐标）对角线的一半：大屏/超长屏时据此扩大区块加载/卸载范围
+  function viewRadiusWorld() { return Math.sqrt(W * W + H * H) / (2 * SCALE); }
+  function loadMargin() { return Math.max(LOAD_MARGIN, viewRadiusWorld() + 120); }
+  function unloadMargin() { return Math.max(UNLOAD_MARGIN, viewRadiusWorld() + 700); }
 
   function clamp(v, lo, hi) { return v < lo ? lo : (v > hi ? hi : v); }
   function clamp01(v) { return clamp(v, 0, 1); }
@@ -328,7 +338,7 @@
 
   function ensureChunksAround(centerX, centerY) {
     var c0 = worldToChunk(centerX, centerY);
-    var range = Math.ceil(LOAD_MARGIN / CHUNK_SIZE) + 1;
+    var range = Math.ceil(loadMargin() / CHUNK_SIZE) + 1;
     for (var dy = -range; dy <= range; dy++) {
       for (var dx = -range; dx <= range; dx++) getChunk(c0.cx + dx, c0.cy + dy);
     }
@@ -343,7 +353,7 @@
     chunkCache.forEach(function (chunk, key) {
       var ccx = chunk.cx * CHUNK_SIZE + CHUNK_SIZE / 2;
       var ccy = chunk.cy * CHUNK_SIZE + CHUNK_SIZE / 2;
-      if (distance(ccx, ccy, centerX, centerY) > UNLOAD_MARGIN) toDelete.push(key);
+      if (distance(ccx, ccy, centerX, centerY) > unloadMargin()) toDelete.push(key);
     });
     for (var i = 0; i < toDelete.length; i++) chunkCache.delete(toDelete[i]);
   }
@@ -365,7 +375,7 @@
     chunkCache.forEach(function (chunk) {
       var ccx = chunk.cx * CHUNK_SIZE + CHUNK_SIZE / 2;
       var ccy = chunk.cy * CHUNK_SIZE + CHUNK_SIZE / 2;
-      if (distance(ccx, ccy, centerX, centerY) < LOAD_MARGIN + CHUNK_SIZE) {
+      if (distance(ccx, ccy, centerX, centerY) < loadMargin() + CHUNK_SIZE) {
         for (var i = 0; i < chunk.mouseSpawnPoints.length; i++) points.push(chunk.mouseSpawnPoints[i]);
       }
     });
@@ -397,7 +407,7 @@
   var mice = [];
 
   function resetWorld() {
-    catAnim = newAnim(); gulp = null; dustPuffs.length = 0;
+    catAnim = newAnim(); gulp = null; dustPuffs.length = 0; lastPackAt = -999; nextPackSize = null;
     worldSeed = (Math.random() * 2147483647) | 0;
     chunkCache.clear();
     mice.length = 0;
@@ -574,7 +584,10 @@
     return Math.max(byScore, byTime);
   }
 
-  function maxMice(t) { return Math.round(lerp(5, 10, t)); }
+  function maxMice(t) { return Math.round(lerp(10, 18, t)); }
+  function packChance(t) { return lerp(0.35, 0.6, t); }
+  function packCooldownFor(t) { return lerp(4, 2, t); }
+  var lastPackAt = -999, packSeq = 0, nextPackSize = null;
   function spawnCooldownFor(t) { return lerp(2.2, 0.9, t); }
 
   function speedMultFor(type, t) {
@@ -646,6 +659,15 @@
     var t = currentDifficulty();
     if (mice.length >= maxMice(t)) return;
 
+    var room = maxMice(t) - mice.length;
+    if (nextPackSize == null) nextPackSize = 3 + Math.floor(Math.random() * 4);
+    if (room >= nextPackSize && elapsedPlayTime - lastPackAt >= packCooldownFor(t) && Math.random() < packChance(t)) {
+      var ppt = pickSpawnPoint(nearbyMouseSpawnPoints(camera.x, camera.y));
+      if (ppt) { spawnPack(ppt, nextPackSize, t); lastPackAt = elapsedPlayTime; nextPackSize = null; return; }
+    }
+
+    // 单只老鼠最多占到上限 -6，给鼠群（3–6 只）留位置
+    if (room <= 6 && countMiceByType("grey") >= MIN_EASY_MICE) return;
     var type;
     if (countMiceByType("grey") < MIN_EASY_MICE) {
       type = "grey";
@@ -665,6 +687,47 @@
     lastMiceSpawnAt[type] = elapsedPlayTime;
   }
 
+  // 鼠群：3–6 只混合类型，聚在一起游荡；被追时四散奔逃
+  function spawnPack(pt, n, t) {
+    var id = ++packSeq, dir = randomAngle(), goldUsed = false;
+    for (var k = 0; k < n; k++) {
+      var type = "grey";
+      var r = Math.random();
+      if (t >= 0.5 && !goldUsed && r < 0.15) { type = "gold"; goldUsed = true; }
+      else if (t >= 0.2 && r < 0.15 + lerp(0.2, 0.45, clamp01((t - 0.2) / 0.8))) type = "brown";
+      var a = (k / n) * Math.PI * 2 + Math.random() * 0.6, d = k === 0 ? 0 : 22 + Math.random() * 22;
+      var x = pt.x + Math.cos(a) * d, y = pt.y + Math.sin(a) * d;
+      var obs = queryNearbyObstacles(x, y), bad = false;
+      for (var q = 0; q < obs.length; q++) { var o = obs[q]; if (x > o.x - 12 && x < o.x + o.w + 12 && y > o.y - 12 && y < o.y + o.h + 12) { bad = true; break; } }
+      if (bad) { x = pt.x; y = pt.y; }
+      spawnMouseAt(x, y, type, t);
+      var m = mice[mice.length - 1];
+      m.packId = id; m.wanderDir = dir; m.scatter = 0;
+      lastMiceSpawnAt[type] = elapsedPlayTime;
+    }
+  }
+  var packCenters = {};
+  function computePackCenters() {
+    packCenters = {};
+    for (var i = 0; i < mice.length; i++) {
+      var m = mice[i]; if (!m.packId) continue;
+      var c = packCenters[m.packId] || (packCenters[m.packId] = { x: 0, y: 0, n: 0, dir: m.wanderDir });
+      c.x += m.x; c.y += m.y; c.n++;
+    }
+    for (var k in packCenters) { packCenters[k].x /= packCenters[k].n; packCenters[k].y /= packCenters[k].n; }
+  }
+  function alertPack(src) {
+    for (var i = 0; i < mice.length; i++) {
+      var o = mice[i];
+      if (o === src || o.packId !== src.packId || o.state === "flee") continue;
+      if (distance(o.x, o.y, src.x, src.y) < 140) startFlee(o);
+    }
+  }
+  function startFlee(m) {
+    m.state = "flee"; m.awareBuffer = 0;
+    if (m.packId) m.scatter = (Math.random() < 0.5 ? -1 : 1) * (0.45 + Math.random() * 0.85);
+  }
+
   function rayBlocked(x, y, angle, dist) {
     var tx = x + Math.cos(angle) * dist, ty = y + Math.sin(angle) * dist;
     var obstacles = queryNearbyObstacles(x, y);
@@ -676,13 +739,14 @@
   }
 
   function updateMice(dt) {
+    computePackCenters();
     for (var i = mice.length - 1; i >= 0; i--) {
       var m = mice[i];
       m.r = MOUSE_RADIUS * entityScaleMult;
       var dToCat = distance(m.x, m.y, cat.x, cat.y);
 
       if (m.state === "wander") {
-        if (dToCat < MOUSE_AWARE_R) { m.state = "flee"; m.awareBuffer = 0; }
+        if (dToCat < MOUSE_AWARE_R) { startFlee(m); if (m.packId) alertPack(m); }
       } else if (dToCat > MOUSE_AWARE_R * 1.2) {
         m.awareBuffer += dt;
         if (m.awareBuffer > 0.3) m.state = "wander";
@@ -692,7 +756,7 @@
 
       if (m.state === "flee") {
         var away = normalize(m.x - cat.x, m.y - cat.y);
-        var desiredAngle = Math.atan2(away.y, away.x);
+        var desiredAngle = Math.atan2(away.y, away.x) + (m.scatter || 0);
         var finalAngle = desiredAngle;
         if (rayBlocked(m.x, m.y, desiredAngle, m.r * 3)) {
           var tryAngles = [Math.PI / 6, -Math.PI / 6, Math.PI / 3, -Math.PI / 3];
@@ -713,7 +777,14 @@
           if (Math.random() < 0.45) m.wanderDir = randomAngle();
           m.idleTimer = Math.random() < 0.4 ? (0.6 + Math.random()) : 0;
         }
-        if (m.idleTimer > 0) {
+        var pc = m.packId ? packCenters[m.packId] : null;
+        if (pc && pc.n > 1) {
+          // 鼠群成员：共享游荡方向，离群太远时向群中心靠拢
+          var wd = pc.dir, toC = distance(m.x, m.y, pc.x, pc.y);
+          if (toC > 45) { var cv2 = normalize(pc.x - m.x, pc.y - m.y); wd = Math.atan2(cv2.y + Math.sin(wd) * 0.5, cv2.x + Math.cos(wd) * 0.5); }
+          m.vx = Math.cos(wd) * m.speed * 0.35; m.vy = Math.sin(wd) * m.speed * 0.35;
+          if (m.idleTimer > 0) { m.idleTimer -= dt; m.vx *= 0.2; m.vy *= 0.2; }
+        } else if (m.idleTimer > 0) {
           m.idleTimer -= dt;
           m.vx = 0; m.vy = 0;
         } else {
@@ -733,7 +804,7 @@
       m.runCycle += dt * (Math.sqrt(m.vx * m.vx + m.vy * m.vy) / 24 + 0.3);
 
       var dAfter = distance(m.x, m.y, cat.x, cat.y);
-      if (dAfter > MOUSE_CLEANUP_R) { mice.splice(i, 1); continue; }
+      if (dAfter > Math.max(MOUSE_CLEANUP_R, unloadMargin() + CHUNK_SIZE)) { mice.splice(i, 1); continue; }
       if (dAfter < cat.r + m.r) { onCapture(m); mice.splice(i, 1); }
     }
   }
@@ -1639,10 +1710,10 @@
   // 快照：其他人的分数（降序）+ 自己的精确名次（按 live_run_id 识别自己）
   var mySnapshotRank = null;
   function applySnapshotToHud() {
-    if (!backendConfigured || (leaderboardSnapshot.length === 0 && mySnapshotRank == null)) { dom.rankText.textContent = "排名：--"; return; }
+    if (!backendConfigured || (leaderboardSnapshot.length === 0 && mySnapshotRank == null)) { setText(dom.rankText, "排名：--"); return; }
     if (run.id == null) {
       var est = estimateRank(leaderboardSnapshot, score);
-      dom.rankText.textContent = est > leaderboardSnapshot.length ? ("排名：" + leaderboardSnapshot.length + "+ 名") : ("当前约第 " + est + " 名");
+      setText(dom.rankText, est > leaderboardSnapshot.length ? ("排名：" + leaderboardSnapshot.length + "+ 名") : ("当前约第 " + est + " 名"));
       return;
     }
     // 名次口径与服务端一致：分数高者在前，同分时别人先达到 → 排在我前面。
@@ -1650,9 +1721,9 @@
     for (var i = 0; i < leaderboardSnapshot.length; i++) { if (leaderboardSnapshot[i] >= score) ahead++; else break; }
     var rank = ahead + 1;
     if (leaderboardSnapshot.length >= LEADERBOARD_SNAPSHOT_LIMIT - 1 && ahead >= leaderboardSnapshot.length) {
-      dom.rankText.textContent = "排名：" + LEADERBOARD_SNAPSHOT_LIMIT + "+ 名";
+      setText(dom.rankText, "排名：" + LEADERBOARD_SNAPSHOT_LIMIT + "+ 名");
     } else {
-      dom.rankText.textContent = "排名：第 " + rank + " 名";
+      setText(dom.rankText, "排名：第 " + rank + " 名");
     }
   }
 
@@ -1806,30 +1877,106 @@
       loadTopScores();
     });
   }
-  function loadTopScores() {
-    dom.leaderboardList.innerHTML = '<div class="lb-loading">加载中…</div>';
-    if (!backendConfigured) {
-      dom.leaderboardList.innerHTML = '<div class="lb-error">排行榜未配置</div>';
-      return;
+  // ---- 排行榜渲染：按行 key 增量更新，数据不变时零 DOM 改动（不闪烁、不丢滚动位置） ----
+  var regionNames = null;
+  try { regionNames = new Intl.DisplayNames(["zh-CN"], { type: "region" }); } catch (e) { regionNames = null; }
+  function flagOf(cc) {
+    if (!cc || !/^[A-Z]{2}$/.test(cc)) return "";
+    return String.fromCodePoint(0x1F1E6 + cc.charCodeAt(0) - 65, 0x1F1E6 + cc.charCodeAt(1) - 65);
+  }
+  function countryName(cc) {
+    if (!cc) return "";
+    try { return (regionNames && regionNames.of(cc)) || cc; } catch (e) { return cc; }
+  }
+  function setText(el, v) { v = String(v); if (el.textContent !== v) el.textContent = v; }
+  function setAttr(el, k, v) { if (el.getAttribute(k) !== v) el.setAttribute(k, v); }
+  function toggleCls(el, c, on) { if (el.classList.contains(c) !== on) el.classList.toggle(c, on); }
+
+  var lbRows = new Map();   // key -> { el, parts, rank, score }
+  var lbRenderedFilter = null, lbMessageEl = null;
+  function lbKey(row) { return row.live_run_id != null ? "r" + row.live_run_id : "n" + (row.nickname || "") + "|" + row.skin; }
+  function lbMakeRow() {
+    var el = document.createElement("div");
+    el.className = "lb-row";
+    var p = {
+      rank: document.createElement("span"), avatar: document.createElement("img"), name: document.createElement("span"),
+      flag: document.createElement("span"), tag: document.createElement("span"), score: document.createElement("span")
+    };
+    p.rank.className = "lb-rank"; p.avatar.className = "lb-avatar"; p.avatar.alt = ""; p.name.className = "lb-name";
+    p.flag.className = "lb-flag"; p.score.className = "lb-score";
+    el.appendChild(p.rank); el.appendChild(p.avatar); el.appendChild(p.name); p.name.appendChild(p.flag);
+    p.nameText = document.createTextNode(""); p.name.appendChild(p.nameText);
+    el.appendChild(p.tag); el.appendChild(p.score);
+    return { el: el, parts: p, rank: null, score: null };
+  }
+  function lbShowMessage(cls, text) {
+    // 只在列表里没有任何行时显示提示（首次加载/空榜/首次失败）；刷新失败时保留旧数据
+    if (lbRows.size > 0 && cls !== "lb-empty") return;
+    lbRows.forEach(function (r) { r.el.remove(); }); lbRows.clear();
+    if (!lbMessageEl) lbMessageEl = document.createElement("div");
+    if (lbMessageEl.className !== cls) lbMessageEl.className = cls;
+    setText(lbMessageEl, text);
+    if (lbMessageEl.parentNode !== dom.leaderboardList || dom.leaderboardList.childNodes.length !== 1) {
+      dom.leaderboardList.textContent = ""; dom.leaderboardList.appendChild(lbMessageEl);
     }
-    restGet("/rest/v1/leaderboard_live?select=nickname,display_score,is_live,is_paused,skin,rank,live_run_id" + (lbSkinFilter ? "&skin=eq." + lbSkinFilter : "") + "&order=rank.asc&limit=" + LEADERBOARD_TOPN_LIMIT)
+  }
+  function lbRender(rows) {
+    var list = dom.leaderboardList;
+    if (lbMessageEl && lbMessageEl.parentNode === list) list.removeChild(lbMessageEl);
+    var first = lbRows.size === 0;
+    var seen = new Set();
+    for (var i = 0; i < rows.length; i++) {
+      var row = rows[i], key = lbKey(row);
+      if (seen.has(key)) key += "#" + i;
+      seen.add(key);
+      var r = lbRows.get(key);
+      if (!r) { r = lbMakeRow(); lbRows.set(key, r); }
+      var p = r.parts;
+      var rank = row.rank != null ? row.rank : i + 1;
+      var skinId = SKIN_IDS.indexOf(row.skin) >= 0 ? row.skin : "orange";
+      var isMe = run.id != null && row.live_run_id === run.id;
+      var changed = !first && r.rank != null && (r.rank !== rank || r.score !== row.display_score);
+      r.rank = rank; r.score = row.display_score;
+      setText(p.rank, rank);
+      var src = window.CatArt.avatarDataUrl(skinId);
+      if (p.avatar.getAttribute("src") !== src) p.avatar.setAttribute("src", src);
+      var nm = row.nickname || "匿名猫";
+      if (p.nameText.nodeValue !== nm) p.nameText.nodeValue = nm;
+      var fl = flagOf(row.country);
+      setText(p.flag, fl);
+      setAttr(p.flag, "title", fl ? countryName(row.country) : "");
+      toggleCls(p.flag, "hidden", !fl);
+      var tagCls = "", tagText = "";
+      if (isMe) { tagCls = "lb-me-tag"; tagText = "我"; }
+      else if (row.is_live) { tagCls = "lb-badge live"; tagText = "游戏中"; }
+      else if (row.is_paused) { tagCls = "lb-badge paused"; tagText = "已暂停"; }
+      if (p.tag.className !== tagCls) p.tag.className = tagCls;
+      setText(p.tag, tagText);
+      setText(p.score, row.display_score);
+      toggleCls(r.el, "me", isMe);
+      if (changed) {
+        r.el.classList.remove("lb-changed"); void r.el.offsetWidth; r.el.classList.add("lb-changed");
+        clearTimeout(r.hl); r.hl = setTimeout(function (el) { el.classList.remove("lb-changed"); }.bind(null, r.el), 1300);
+      }
+      var at = list.children[i];
+      if (at !== r.el) list.insertBefore(r.el, at || null);
+    }
+    lbRows.forEach(function (r, key) { if (!seen.has(key)) { r.el.remove(); lbRows.delete(key); } });
+  }
+  function loadTopScores() {
+    if (!backendConfigured) { lbShowMessage("lb-error", "排行榜未配置"); return; }
+    if (lbRenderedFilter !== lbSkinFilter) {
+      lbRenderedFilter = lbSkinFilter;
+      lbRows.forEach(function (r) { r.el.remove(); }); lbRows.clear();
+    }
+    if (lbRows.size === 0) lbShowMessage("lb-loading", "加载中…");
+    var filterAtRequest = lbSkinFilter;
+    restGet("/rest/v1/leaderboard_live?select=nickname,display_score,is_live,is_paused,skin,rank,live_run_id,country" + (lbSkinFilter ? "&skin=eq." + lbSkinFilter : "") + "&order=rank.asc&limit=" + LEADERBOARD_TOPN_LIMIT)
       .then(function (res) {
-        if (!res.ok) { dom.leaderboardList.innerHTML = '<div class="lb-error">暂时无法连接排行榜</div>'; return; }
-        if (res.rows.length === 0) { dom.leaderboardList.innerHTML = '<div class="lb-empty">' + (lbSkinFilter ? '这款小猫还没有人上榜' : '还没有人上榜，来当第一个吧！') + '</div>'; return; }
-        var html = "";
-        for (var i = 0; i < res.rows.length; i++) {
-          var row = res.rows[i];
-          var badge = "";
-          if (row.is_live) badge = '<span class="lb-badge live">游戏中</span>';
-          else if (row.is_paused) badge = '<span class="lb-badge paused">已暂停</span>';
-          var skinId = SKIN_IDS.indexOf(row.skin) >= 0 ? row.skin : "orange";
-          var isMe = run.id != null && row.live_run_id === run.id;
-          html += '<div class="lb-row' + (isMe ? ' me' : '') + '"><span class="lb-rank">' + (row.rank != null ? row.rank : i + 1) + '</span>' +
-            '<img class="lb-avatar" alt="" src="' + window.CatArt.avatarDataUrl(skinId) + '">' +
-            '<span class="lb-name">' + escapeHtml(row.nickname || "匿名猫") + '</span>' +
-            (isMe ? '<span class="lb-me-tag">我</span>' : badge) + '<span class="lb-score">' + row.display_score + '</span></div>';
-        }
-        dom.leaderboardList.innerHTML = html;
+        if (filterAtRequest !== lbSkinFilter) return; // 期间切换了筛选，丢弃旧响应
+        if (!res.ok) { lbShowMessage("lb-error", "暂时无法连接排行榜"); return; }
+        if (res.rows.length === 0) { lbShowMessage("lb-empty", lbSkinFilter ? "这款小猫还没有人上榜" : "还没有人上榜，来当第一个吧！"); return; }
+        lbRender(res.rows);
       });
   }
 
@@ -1911,7 +2058,7 @@
     var abi = abilityOf(currentSkin);
     dom.abilityBadge.innerHTML = '<span class="ab-ic">' + abi.icon + '</span>' + abi.name;
     dom.comboText.classList.add("hidden");
-    dom.rankText.textContent = "排名：--";
+    setText(dom.rankText, "排名：--");
     state = STATE_PLAY;
     startRun(nickname);
   }
@@ -2041,11 +2188,11 @@
   // =======================================================================
 
   function updateHud() {
-    dom.scoreText.textContent = String(score);
+    setText(dom.scoreText, score);
     if (ab) dom.abilityBadge.classList.toggle("flash", ab.flash > 0);
     if (combo >= 2) {
       dom.comboText.classList.remove("hidden");
-      dom.comboText.textContent = "连击 x" + combo;
+      setText(dom.comboText, "连击 x" + combo);
     } else {
       dom.comboText.classList.add("hidden");
     }
@@ -2248,6 +2395,8 @@
     setFacing: function (a) { cat.facing = a; },
     get catAnim() { return { mode: catAnim.mode, dir: catAnim.dir, gulp: !!gulp }; },
     get spriteStats() { return ANIM.stats(); },
+    get packs() { var c = {}; mice.forEach(function (m) { if (m.packId) c[m.packId] = (c[m.packId] || 0) + 1; }); return c; },
+    spawnPackNear: function (dx, dy, n) { spawnPack({ x: cat.x + dx, y: cat.y + dy }, n || 5, currentDifficulty()); },
     freezeMice: function () { mice.forEach(function (m) { m.speed = 0; m.vx = 0; m.vy = 0; }); },
     allRandomNames: allRandomNames,
     randomNameOk: randomNameOk,

@@ -7,6 +7,7 @@
 html, body {
   width: 100%;
   height: 100%;
+  min-height: 100dvh;
   overflow: hidden;
   background: #8fcf6b;
   font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei",
@@ -22,6 +23,8 @@ html, body {
   inset: 0;
   width: 100%;
   height: 100%;
+  height: 100dvh;
+  min-height: -webkit-fill-available;
   overflow: hidden;
 }
 
@@ -42,7 +45,7 @@ html, body {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  padding: max(10px, env(safe-area-inset-top)) 14px 0 14px;
+  padding: max(10px, env(safe-area-inset-top)) max(14px, env(safe-area-inset-right)) 0 max(14px, env(safe-area-inset-left));
   z-index: 5;
   /* #hud 本身必须禁用指针事件：否则即使子元素都设了 pointer-events，
      这个跨越整个顶部的容器仍会挡住下面的 canvas 点击（见 code review）。
@@ -417,3 +420,11 @@ html, body { background: #a8de8e; }
 .lb-chip { border: 2px solid #ffd2a8; background: #fff; border-radius: 999px; height: 30px; min-width: 30px; padding: 0 3px; font-weight: 700; color: #7a4a2a; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; }
 .lb-chip img { width: 22px; height: 22px; }
 .lb-chip.on { background: #ff9d4d; border-color: #ff9d4d; color: #fff; }
+
+/* ---- 全面屏适配 ---- */
+.overlay { padding: max(16px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) max(16px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left)); }
+.overlay > .panel { max-height: 100%; overflow-y: auto; }
+.lb-flag { margin-right: 4px; font-size: 15px; cursor: default; }
+.lb-row.lb-changed { animation: lb-changed 1.2s ease-out; }
+@keyframes lb-changed { 0% { background: #fff1c2; } 100% { background: transparent; } }
+.lb-hud-btn, .ability-badge { white-space: nowrap; }
