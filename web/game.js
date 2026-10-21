@@ -127,6 +127,18 @@
   // =======================================================================
 
   // 音频全部在 audio.js（CatAudio）里实时合成：生成式 BGM + 音效；这里只做薄封装
+  // ---- 体验设置（存 localStorage）：震动/屏幕抖动、减少动效、虚拟摇杆、色弱模式 ----
+  function lsBool(k, d) { try { var v = localStorage.getItem(k); return v == null ? d : v === "1"; } catch (e) { return d; } }
+  function lsSetBool(k, v) { try { localStorage.setItem(k, v ? "1" : "0"); } catch (e) {} }
+  var prefersRM = !!(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
+  var shakeOn = lsBool("catmouse_shake", true), reducedMotion = lsBool("catmouse_reduce_motion", prefersRM);
+  var joystickOn = lsBool("catmouse_joystick", false), cbMode = lsBool("catmouse_cb", false);
+  var shakeT = 0, shakeAmp = 0;
+  function feedback(kind) { // 冲刺/飞扑落地的轻微屏幕抖动 + 手机震动
+    if (!shakeOn || reducedMotion) return;
+    var amp = kind === "wave" ? 5 : kind === "dash" ? 2.5 : 3; shakeT = 0.15; shakeAmp = Math.max(shakeAmp, amp);
+    try { if (navigator.vibrate) navigator.vibrate(kind === "wave" ? 25 : 12); } catch (e) {}
+  }
   var CA = window.CatAudio || { unlock: function () {}, sfx: {}, settings: { master: true }, setIntensity: function () {}, setMuffle: function () {}, set: function () {} };
   var muted = !CA.settings.master;
   // 小猫皮肤：纯外观；本地记住上次选择，同时随 start_run 存到服务端（排行榜头像）
@@ -402,25 +414,41 @@
     moveDir.x = n.x; moveDir.y = n.y;
   }
 
+  // 虚拟摇杆：按下处为圆心，拖动方向即移动方向（可在暂停面板开启）
+  var joy = null;
+  function joyDir(px, py) {
+    var dx = px - joy.x, dy = py - joy.y, d = Math.sqrt(dx * dx + dy * dy);
+    joy.kx = d > 50 ? joy.x + dx / d * 50 : px; joy.ky = d > 50 ? joy.y + dy / d * 50 : py;
+    if (d < 10) return null; return { x: dx / d, y: dy / d };
+  }
+  function drawJoystick() {
+    if (!joy) return;
+    ctx.globalAlpha = 0.35; ctx.fillStyle = "#fff"; ctx.beginPath(); ctx.arc(joy.x, joy.y, 50, 0, 7); ctx.fill();
+    ctx.globalAlpha = 0.7; ctx.fillStyle = "#ff9d4d"; ctx.beginPath(); ctx.arc(joy.kx, joy.ky, 22, 0, 7); ctx.fill(); ctx.globalAlpha = 1;
+  }
   function onPointerDown(e) {
     ensureAudio();
     if (state !== STATE_PLAY) return;
     if (activePointerId !== null) return;
     activePointerId = e.pointerId;
     uniCancel();
+    if (dom && dom.hud) dom.hud.classList.add("steering"); // 拖动中手指划过右上角按钮不会误触
+    if (joystickOn) { joy = { x: e.clientX, y: e.clientY, kx: e.clientX, ky: e.clientY }; return; }
     var dir = computeDirFromPoint(e.clientX, e.clientY);
     if (dir) { moveDir.x = dir.x; moveDir.y = dir.y; }
   }
 
   function onPointerMove(e) {
     if (e.pointerId !== activePointerId) return;
-    var dir = computeDirFromPoint(e.clientX, e.clientY);
-    if (dir) { moveDir.x = dir.x; moveDir.y = dir.y; }
+    var dir = joy ? joyDir(e.clientX, e.clientY) : computeDirFromPoint(e.clientX, e.clientY);
+    if (dir) { if (joy && (dir.x * moveDir.x + dir.y * moveDir.y) < 0.9) uniCancel(); moveDir.x = dir.x; moveDir.y = dir.y; }
+    else if (joy) { moveDir.x = 0; moveDir.y = 0; }
   }
 
   function onPointerUp(e) {
     if (e.pointerId !== activePointerId) return;
-    activePointerId = null;
+    activePointerId = null; joy = null;
+    if (dom && dom.hud) dom.hud.classList.remove("steering");
     moveDir.x = 0; moveDir.y = 0;
     syncKeyDir();
   }
@@ -691,7 +719,7 @@
   // 恐慌波：受惊老鼠每 0.12 秒把恐慌传给 60 内的邻居，最多 4 层
   function startFlee(m, depth) {
     if (m.asleep || m.under) return;
-    if (m.state !== "flee") { m.excl = 0.6; if (CA.sfx.squeak && distance(m.x, m.y, cat.x, cat.y) < 300 * entityScaleMult) CA.sfx.squeak(); }
+    if (m.state !== "flee") { m.excl = 0.6; var dsq = distance(m.x, m.y, cat.x, cat.y); if (CA.sfx.squeak && dsq < 300 * entityScaleMult) CA.sfx.squeak(1 - dsq / (300 * entityScaleMult)); }
     if (!depth && CA.sfx.panic && distance(m.x, m.y, cat.x, cat.y) < 400 * entityScaleMult) CA.sfx.panic();
     m.state = "flee"; m.awareBuffer = 0; m.panicIn = 0;
     if (m.beh === "timid" && !(m.trem > 0)) m.trem = 0.5;
@@ -1224,12 +1252,13 @@
       b = B[i]; b.age += dt; b.shake = Math.max(0, b.shake - dt);
       // 老鼠好奇钻箱
       if (!b.closed || b.mice.length < boxCap(S)) {
-        for (var k = 0; k < mice.length; k++) {
-          m = mice[k]; if (m.hidden || m.carried || m.under || m.asleep || m.type === "gold" && Math.random() < 0.5 * dt) continue;
+        // 性能：只查箱子 225 半径内的网格，不再每帧遍历全部老鼠
+        gridEach(b.x, b.y, 230 * esm, function (m) {
+          if (m.hidden || m.carried || m.under || m.asleep || m.type === "gold" && Math.random() < 0.5 * dt) return;
           var d = distance(m.x, m.y, b.x, b.y), lureR = (m.beh === "forager" || m.beh === "thief" ? 225 : 150) * esm;
           if (d < lureR && !(m.stun > 0)) m.lureX = b.x, m.lureY = b.y;
           if (d < 14 * esm && b.mice.length < boxCap(S)) { m.hidden = true; m.boxT = 3; b.mice.push(m); b.shake = 0.4; if (S >= 2) b.closed = true; }
-        }
+        });
       }
       // Lv1：没关盖的箱子，老鼠躲 3 秒后跑出来
       if (S < 2) for (var q = b.mice.length - 1; q >= 0; q--) { b.mice[q].boxT -= dt; if (b.mice[q].boxT <= 0) { b.mice[q].hidden = false; b.mice[q].x = b.x + 16 * esm; b.mice.splice(q, 1); } }
@@ -1715,12 +1744,18 @@
   var scorePopups = [];
   var catchParticles = [];
 
+  // 飘字合并：0.3s 内、90px 内的得分并到同一个数字里（显示 +N ♥ ×k），最多 8 个
   function spawnScorePopup(x, y, amount) {
-    scorePopups.push({ x: x, y: y, amount: amount, age: 0, life: 0.9 });
+    for (var i = scorePopups.length - 1; i >= 0; i--) {
+      var p = scorePopups[i];
+      if (p.age < 0.3 && Math.abs(p.x - x) < 90 && Math.abs(p.y - y) < 90) { p.amount += amount; p.n = (p.n || 1) + 1; p.age = Math.min(p.age, 0.12); p.x = (p.x + x) / 2; return; }
+    }
+    scorePopups.push({ x: x, y: y, amount: amount, age: 0, life: 0.9, n: 1 });
+    if (scorePopups.length > 8) scorePopups.shift();
   }
 
   function spawnCatchParticles(x, y) {
-    if (catchParticles.length > 60) catchParticles.splice(0, catchParticles.length - 60);
+    var pcap = resScale < 1 ? 32 : 60; if (catchParticles.length > pcap) catchParticles.splice(0, catchParticles.length - pcap);
     for (var i = 0; i < 8; i++) {
       var a = Math.random() * Math.PI * 2;
       var sp = 50 + Math.random() * 50;
@@ -2120,8 +2155,9 @@
       for (var q = 0; q < vis.length; q++) { var vm = vis[q].m, uu = s(vm.r) * MOUSE_UNIT_PER_R, rx = (vm.anim && vm.anim.mode === "run" ? 20 : 16) * uu; ctx.moveTo(vis[q].sx + rx, vis[q].sy + 24 * uu); ctx.ellipse(vis[q].sx, vis[q].sy + 24 * uu, rx, rx * 0.28, 0, 0, Math.PI * 2); }
       ctx.fill();
     }
+    var cut20 = Infinity; if (vis.length > 20) { var d20 = vis.map(function (v) { return v.d; }).sort(function (a, b) { return a - b; }); cut20 = d20[19]; }
     for (var k = 0; k < vis.length; k++) {
-      var v = vis[k]; m = v.m; sx = v.sx; sy = v.sy;
+      var v = vis[k]; m = v.m; sx = v.sx; sy = v.sy; tellNear = v.d <= cut20;
       if (!m.anim) m.anim = newAnim();
       m.lodFull = v.full; if (v.full) drawStats.full++;
       var r = s(m.r), u = r * MOUSE_UNIT_PER_R, d = ANIM.DIR8[m.anim.dir];
@@ -2135,9 +2171,11 @@
       if (!dbgDraw.noTell && (v.full || m.type === "gold" || m.packId)) drawTell(m, sx + ox, sy, u, st, v.full, v.i);
     }
   }
+  var tellNear = true;
   function drawTell(m, sx, sy, u, st, full, i) {
     var top = sy + (st[0] === "sit" ? -46 : -32) * u;
     if (m.type === "gold") {
+      if (cbMode) { ctx.save(); ctx.setLineDash([5 * u, 4 * u]); ctx.lineWidth = 4 * u; ctx.strokeStyle = "#1a1a1a"; ctx.beginPath(); ctx.arc(sx, sy, 30 * u, 0, 7); ctx.stroke(); ctx.strokeStyle = "#fff"; ctx.lineDashOffset = 4 * u; ctx.stroke(); ctx.restore(); }
       if (full && CA.sfx.sparkle) CA.sfx.sparkle();
       emojiQuick("👑", sx, top - 2 * u, 29 * u);
       if (full) { var tw = (Math.sin(m.runCycle * 3 + i) + 1) / 2; ART.star(ctx, sx + 24 * u, top + 10 * u, (3 + tw * 3) * u * 1.4, "rgba(255,236,140," + (0.5 + tw * 0.5) + ")"); }
@@ -2145,7 +2183,7 @@
     if (m.packId) { // 同色小围巾；领头鼠举小旗
       ctx.strokeStyle = "hsl(" + packHue(m.packId) + ",80%,58%)"; ctx.lineWidth = 4 * u;
       ctx.beginPath(); ctx.arc(sx, sy - 6 * u, 11 * u, 0.15 * Math.PI, 0.85 * Math.PI); ctx.stroke();
-      if (m.leader) emojiQuick("🚩", sx + 14 * u, top, 26 * u);
+      if (m.leader && tellNear) emojiQuick("🚩", sx + 14 * u, top, 26 * u);
     }
     if (m.beh === "timid") { ctx.fillStyle = "#7cc8ff"; ctx.beginPath(); ctx.ellipse(sx + 15 * u, top + 12 * u, 3.2 * u, 4.6 * u, 0, 0, 7); ctx.fill(); }
     if (m.beh === "thief") emojiQuick("🧀", sx + Math.cos(m.facing) * 14 * u, sy + 4 * u, 26 * u);
@@ -2154,7 +2192,7 @@
     if (m.cornerT > 0) emojiQuick("💦", sx - 14 * u, top + 2 * u, 22 * u);
     if (m.beh === "teaser" && m.tiredT > 0) emojiQuick("💦", sx + 14 * u, top, 22 * u);
     if (m.asleep) emojiQuick("💤", sx + 14 * u + Math.sin(elapsedPlayTime * 2 + i) * 3 * u, top - 4 * u - ((elapsedPlayTime + m.seed) % 1.5) * 6 * u, 26 * u);
-    if (m.excl > 0) emojiQuick("!", sx, top - 10 * u, 24 * u, null, "#ff4d4d");
+    if (m.excl > 0 && tellNear) emojiQuick("!", sx, top - 10 * u, 24 * u, null, "#ff4d4d");
   }
 
 
@@ -2165,6 +2203,7 @@
       var c = catchParticles[i];
       var sx = worldToScreenX(c.x), sy = worldToScreenY(c.y);
       var alpha = Math.max(0, 1 - c.age / c.life);
+      if (reducedMotion) alpha *= 0.5;
       ctx.globalAlpha = alpha;
       var size = s(7) * (0.6 + alpha * 0.6) * entityScaleMult;
       if (i % 2 === 0) ART.heart(ctx, sx, sy, size, PARTICLE_COLORS[0]);
@@ -2182,9 +2221,15 @@
       ctx.font = "900 " + Math.round(s(18) * entityScaleMult * pop) + "px sans-serif";
       ctx.lineWidth = Math.max(3, s(4));
       ctx.strokeStyle = "#ff7a9a";
-      ctx.strokeText("+" + p.amount + " ♥", sx2, sy2 - s(26));
+      // 避让：靠近猫时把飘字推到猫头顶上方，并降低透明度，不挡住猫
+      var cx0 = worldToScreenX(cat.x), cy0 = worldToScreenY(cat.y), ty = sy2 - s(26), avoid = s(cat.r * 2.4);
+      if (Math.abs(sx2 - cx0) < avoid && Math.abs(ty - cy0) < avoid) { ty = Math.min(ty, cy0 - avoid); ctx.globalAlpha = a * 0.75; }
+      var big = p.n > 1 ? 1 + Math.min(0.5, p.n * 0.06) : 1;
+      if (big > 1) ctx.font = "900 " + Math.round(s(18) * entityScaleMult * pop * big) + "px sans-serif";
+      var txt = "+" + p.amount + " ♥" + (p.n > 1 ? " ×" + p.n : "");
+      ctx.strokeText(txt, sx2, ty);
       ctx.fillStyle = "#ffffff";
-      ctx.fillText("+" + p.amount + " ♥", sx2, sy2 - s(26));
+      ctx.fillText(txt, sx2, ty);
     }
     ctx.globalAlpha = 1;
   }
@@ -2343,6 +2388,7 @@
         } else {
           dom.resultRankStatus.textContent = rankText;
         }
+        showRankGap(res.final_score != null ? res.final_score : Math.round(score), res.run_rank);
       } else {
         // 后端正常响应了，只是这次调用本身被判定无效（比如 invalid_run），
         // 不是网络问题，不应该说成"未能连接排行榜"。
@@ -2351,6 +2397,14 @@
     });
   }
 
+  // 结算页：离上一名还差多少分（用局内排行快照：其他人的分数降序）
+  function showRankGap(fs, rk) {
+    var el = document.getElementById("resultGap"); if (!el) return;
+    if (rk === 1) { el.textContent = "🏆 你是第一名！"; el.classList.remove("hidden"); return; }
+    var above = null; for (var i = leaderboardSnapshot.length - 1; i >= 0; i--) if (leaderboardSnapshot[i] > fs) { above = leaderboardSnapshot[i]; break; }
+    if (above == null) { el.classList.add("hidden"); return; }
+    el.textContent = "离上一名还差 " + (above - fs + 1) + " 分，再来一局冲一冲！"; el.classList.remove("hidden");
+  }
   window.addEventListener("pagehide", function () {
     if (!backendConfigured || run.offline || run.id == null) return;
     try {
@@ -2384,7 +2438,7 @@
   // 快照：其他人的分数（降序）+ 自己的精确名次（按 live_run_id 识别自己）
   var mySnapshotRank = null;
   function applySnapshotToHud() {
-    if (!backendConfigured || (leaderboardSnapshot.length === 0 && mySnapshotRank == null)) { setText(dom.rankText, "排名：--"); return; }
+    if (!backendConfigured || (leaderboardSnapshot.length === 0 && mySnapshotRank == null)) { setText(dom.rankText, "排名：未上榜"); return; }
     if (run.id == null) {
       var est = estimateRank(leaderboardSnapshot, score);
       setText(dom.rankText, est > leaderboardSnapshot.length ? ("排名：" + leaderboardSnapshot.length + "+ 名") : ("当前约第 " + est + " 名"));
@@ -2735,7 +2789,7 @@
     resetAbilities();
     dom.abilityBadge.dataset.key = ""; updateSkillBadge(true);
     dom.comboText.classList.add("hidden");
-    setText(dom.rankText, "排名：--");
+    setText(dom.rankText, "排名：未上榜");
     state = STATE_PLAY;
     startRun(nickname);
   }
@@ -2782,7 +2836,7 @@
     dom.resultDuration.textContent = String(Math.round(elapsedPlayTime));
     dom.resultCombo.textContent = String(comboMax);
     dom.resultBest.textContent = String(best);
-    dom.resultRankStatus.textContent = "结算中…";
+    dom.resultRankStatus.textContent = "结算中…"; var rg = document.getElementById("resultGap"); if (rg) rg.classList.add("hidden");
     dom.nicknameInputResult.value = storageGet("catmouse_nickname", "");
     dom.nicknameHintResult.classList.add("hidden");
     showScreen(dom.resultScreen);
@@ -2890,12 +2944,45 @@
   (function () {
     var S = CA.settings, q = function (id) { return document.getElementById(id); };
     if (!q("bgmOn")) return;
-    q("bgmOn").checked = S.bgmOn !== false; q("sfxOn").checked = S.sfxOn !== false; q("bgmVol").value = S.bgmVol == null ? 60 : S.bgmVol; q("sfxVol").value = S.sfxVol == null ? 80 : S.sfxVol;
+    q("bgmOn").checked = S.bgmOn !== false; q("sfxOn").checked = S.sfxOn !== false; q("bgmVol").value = S.bgmVol == null ? 50 : S.bgmVol; q("sfxVol").value = S.sfxVol == null ? 80 : S.sfxVol;
     q("bgmOn").addEventListener("change", function () { CA.set("bgmOn", this.checked); });
     q("sfxOn").addEventListener("change", function () { CA.set("sfxOn", this.checked); sfx.click(); });
     q("bgmVol").addEventListener("input", function () { CA.set("bgmVol", +this.value); });
     q("sfxVol").addEventListener("change", function () { CA.set("sfxVol", +this.value); sfx.click(); });
   })();
+  (function () {
+    var q = function (id) { return document.getElementById(id); };
+    [["shakeOn", "catmouse_shake", function (v) { shakeOn = v; if (v) feedback("land"); }],
+     ["reduceMotion", "catmouse_reduce_motion", function (v) { reducedMotion = v; document.body.classList.toggle("reduce-motion", v); }],
+     ["joystickOn", "catmouse_joystick", function (v) { joystickOn = v; }],
+     ["cbMode", "catmouse_cb", function (v) { cbMode = v; }]].forEach(function (c) {
+      var el = q(c[0]); if (!el) return;
+      el.checked = { shakeOn: shakeOn, reduceMotion: reducedMotion, joystickOn: joystickOn, cbMode: cbMode }[c[0]];
+      el.addEventListener("change", function () { lsSetBool(c[1], this.checked); c[2](this.checked); sfx.click(); });
+    });
+    document.body.classList.toggle("reduce-motion", reducedMotion);
+  })();
+  // ---- 首局新手引导（只出现一次）：开始第一局前 3 步说明 ----
+  var ONBOARD_STEPS = [
+    ["👆", "按住屏幕边缘，小猫就朝那个方向跑", "手指在哪边，小猫往哪边跑；松手就停下。也可以在暂停面板开启「虚拟摇杆」。桌面端用方向键 / WASD。"],
+    ["🐾", "靠近老鼠会自动飞扑", "老鼠进入身前扇形会自动扑上去吃掉；直线追会加速冲刺。点别的方向立即取消，不会抢你的操作。"],
+    ["⭐", "点左上角 Lv 徽章看技能", "每只猫有专属招牌技能，抓 15/40/80/150 只进化。点徽章会暂停并显示全部技能说明。"]
+  ];
+  function maybeOnboard(next) {
+    var el = document.getElementById("onboardScreen");
+    if (!el || lsBool("catmouse_onboard_done", false)) { next(); return; }
+    var i = 0;
+    function render() {
+      var st = ONBOARD_STEPS[i];
+      el.querySelector(".ob-ic").textContent = st[0]; el.querySelector(".ob-t").textContent = st[1]; el.querySelector(".ob-d").textContent = st[2];
+      el.querySelector(".ob-dots").textContent = ONBOARD_STEPS.map(function (_, k) { return k === i ? "●" : "○"; }).join(" ");
+      el.querySelector("#onboardNext").textContent = i < ONBOARD_STEPS.length - 1 ? "下一步" : "开始抓老鼠 🐾";
+    }
+    function done() { lsSetBool("catmouse_onboard_done", true); hideScreen(el); next(); }
+    el.querySelector("#onboardNext").onclick = function () { sfx.click(); if (++i >= ONBOARD_STEPS.length) done(); else render(); };
+    el.querySelector("#onboardSkip").onclick = function () { sfx.click(); done(); };
+    render(); showScreen(el); el.querySelector("#onboardNext").focus();
+  }
   // 第一次点按/按键时解锁音频（iOS 需要在用户手势里）
   ["pointerdown", "touchend", "keydown"].forEach(function (ev) { document.addEventListener(ev, function () { ensureAudio(); }, { passive: true, capture: true }); });
 
@@ -2903,7 +2990,7 @@
     if (document.hidden && state === STATE_PLAY) enterPause();
   });
 
-  dom.startBtn.addEventListener("click", beginRun);
+  dom.startBtn.addEventListener("click", function () { maybeOnboard(beginRun); });
   dom.pauseBtn.addEventListener("click", function () { sfx.click(); enterPause(); });
   dom.resumeBtn.addEventListener("click", function () { sfx.click(); resumePlay(); });
   dom.muteBtn.addEventListener("click", function () { ensureAudio(); toggleMute(); });
@@ -3003,7 +3090,7 @@
     var step = L.len * e - prev; L.done = L.len * e;
     cat.x += L.ux * step; cat.y += L.uy * step;
     var obs = queryNearbyObstacles(cat.x, cat.y); for (var i = 0; i < obs.length; i++) resolveCircleAabb(cat, obs[i]);
-    if (L.chain && Math.random() < 0.6) uni.ghosts.push({ x: cat.x, y: cat.y, a: 0.45 });
+    if (L.chain && !reducedMotion && Math.random() < 0.6) uni.ghosts.push({ x: cat.x, y: cat.y, a: 0.45 });
   }
   function uniOnCapture(m) {
     if (uni && uni.lunge && !uni.lunge.hit) { uni.lunge.hit = true; if (uni.lunge.chain) uni.pops.push({ x: m.x, y: m.y - 20, txt: "×" + (uni.chainN + 1), age: 0 }); }
@@ -3016,21 +3103,21 @@
     else { if (uni.dashT > 0) uniCancel(); uni.straightT = 0; }
     uni.lastDx = moveDir.x; uni.lastDy = moveDir.y;
     if (!moving) { uni.lunge = null; uni.chainLeft = 0; uni.chainWin = 0; }
-    if (uni.dashT > 0) { uni.dashT -= dt; if (uni.dashT <= 0) uni.dashMul = 1; if (Math.random() < 0.5) uni.ghosts.push({ x: cat.x, y: cat.y, a: 0.2, line: true, ang: Math.atan2(moveDir.y, moveDir.x), off: (Math.random() - 0.5) * 30 }); }
+    if (uni.dashT > 0) { uni.dashT -= dt; if (uni.dashT <= 0) uni.dashMul = 1; if (!reducedMotion && Math.random() < 0.5) uni.ghosts.push({ x: cat.x, y: cat.y, a: 0.2, line: true, ang: Math.atan2(moveDir.y, moveDir.x), off: (Math.random() - 0.5) * 30 }); }
     else if (moving && uni.straightT >= 1 && uniFind(150 * esm, Math.PI / 6)) {
       uni.dashMul = [1.3, 1.35, 1.4, 1.45, 1.5][st - 1]; uni.dashT = [1.0, 1.2, 1.5, 1.8, 2.2][st - 1]; uni.stats.dash++;
-      if (CA.sfx.uni) CA.sfx.uni("dash");
+      if (CA.sfx.uni) CA.sfx.uni("dash"); feedback("dash");
     }
     // 飞扑 / 连环扑
     var L = uni.lunge;
     if (L && L.t >= L.dur) {
       uni.lunge = null; cat.squash = 1; for (i = 0; i < 4; i++) spawnDust(cat.x, cat.y, Math.atan2(L.uy, L.ux) + (i - 1.5) * 0.9, 10 * esm);
-      if (CA.sfx.uni) CA.sfx.uni("land");
+      if (CA.sfx.uni) CA.sfx.uni("land"); feedback("land");
       if (L.hit) {
         if (st >= 5) { // 小冲击波：晕眩不计分
           uni.waves.push({ x: cat.x, y: cat.y, age: 0 });
           gridEach(cat.x, cat.y, 70 * esm, function (m) { if (uniOk(m) && distance(m.x, m.y, cat.x, cat.y) < 60 * esm) stunM(m, 0.8, "wave"); });
-          if (CA.sfx.uni) CA.sfx.uni("wave");
+          if (CA.sfx.uni) CA.sfx.uni("wave"); feedback("wave");
         }
         if (st >= 4) uni.cd = 0;
         if (!L.chain) uni.chainLeft = [2, 2, 3, 4, 5][st - 1] - 1;
@@ -3087,6 +3174,7 @@
   }
   // 猫身拉伸：飞扑时沿扑击方向拉长、冲刺时略拉长
   function uniCatStretch() {
+    if (reducedMotion) return null;
     if (uni.lunge) { var k = uni.lunge.t / uni.lunge.dur; return { a: Math.atan2(uni.lunge.uy, uni.lunge.ux), s: 1 + 0.35 * Math.sin(Math.PI * Math.min(1, k)) }; }
     if (uni.dashT > 0) return { a: Math.atan2(moveDir.y, moveDir.x), s: 1.12 };
     return null;
@@ -3125,6 +3213,8 @@
 
   function draw() {
     if (state === STATE_START) { drawIdleScene(); return; }
+    var shaking = shakeT > 0 && state === STATE_PLAY;
+    if (shaking) { shakeT -= 1 / 60; var k0 = shakeAmp * Math.max(0, shakeT / 0.15); ctx.save(); ctx.translate((Math.random() - 0.5) * 2 * k0, (Math.random() - 0.5) * 2 * k0); if (shakeT <= 0) shakeAmp = 0; }
     drawBackground();
     drawObstacles();
     drawAbilityGround();
@@ -3136,6 +3226,8 @@
     drawAbilityOverlay();
     drawEffects();
     uniDrawOver();
+    drawJoystick();
+    if (shaking) ctx.restore();
   }
 
 
@@ -3259,8 +3351,9 @@
     if (perfWin.t < 2) return;
     var fps = perfWin.n / perfWin.t; perfWin.last = fps; perfWin.hist.push(Math.round(fps)); if (perfWin.hist.length > 30) perfWin.hist.shift();
     perfWin.t = 0; perfWin.n = 0;
-    if (fps < 45 && resScale === 1 && (window.devicePixelRatio || 1) > 1.2) { resScale = 0.75; perfWin.good = 0; resize(); }
-    else if (fps > 57 && resScale < 1) { perfWin.good += 2; if (perfWin.good >= 10) { resScale = 1; resize(); } }
+    if (fps < 45 && resScale === 1 && ((window.devicePixelRatio || 1) > 1.2 || W * H > 900000)) { resScale = 0.75; perfWin.good = 0; resize(); }
+    else if (fps < 38 && resScale === 0.75) { resScale = 0.6; perfWin.good = 0; resize(); } // 低端机再降一档渲染分辨率（不改老鼠数量）
+    else if (fps > 57 && resScale < 1) { perfWin.good += 2; if (perfWin.good >= 10) { resScale = resScale < 0.75 ? 0.75 : 1; perfWin.good = 0; resize(); } }
     else perfWin.good = 0;
   }
   function frame(now) {

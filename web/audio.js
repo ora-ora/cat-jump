@@ -9,7 +9,7 @@
   var S = {
     master: lsGet("catmouse_muted", "0") !== "1",
     bgmOn: lsGet("catmouse_bgm_on", "1") === "1", sfxOn: lsGet("catmouse_sfx_on", "1") === "1",
-    bgmVol: +lsGet("catmouse_bgm_vol", "60"), sfxVol: +lsGet("catmouse_sfx_vol", "80")
+    bgmVol: +lsGet("catmouse_bgm_vol", "50"), sfxVol: +lsGet("catmouse_sfx_vol", "80")
   };
   var ctx = null, out = null, bgmBus = null, bgmFilter = null, duckG = null, sfxBus = null, noiseBuf = null;
   var stats = { created: 0, ended: 0, dropped: 0, active: 0, bgmActive: 0 };
@@ -142,7 +142,7 @@
       if (beh === "thief") tone(B, t + 0.12, 2637, 0.12, "sine", 0.06);
       tone(B, t + 0.02, 300, 0.12, "sine", 0.22, 120); // 咕
     },
-    combo: function (n) { if (!canPlay("combo", 3, 0.06)) return; var t = now(), f = 660 * Math.pow(2, Math.min(n, 12) / 12); tone(sfxBus, t + 0.08, f, 0.09, "square", 0.06); tone(sfxBus, t + 0.12, f * 1.5, 0.1, "square", 0.05); },
+    combo: function (n) { if (!canPlay("combo", 3, n >= 10 ? 0.16 : 0.09)) return; /* 高连击时降低密度 */ var t = now(), f = 660 * Math.pow(2, Math.min(n, 12) / 12); var cv = n >= 10 ? 0.7 : 1; tone(sfxBus, t + 0.08, f, 0.09, "square", 0.06 * cv); tone(sfxBus, t + 0.12, f * 1.5, 0.1, "square", 0.05 * cv); },
     evolve: function () { if (!canPlay("evolve", 5, 0.5)) return; var t = now(); duck(12, 1); [60, 64, 67, 72, 76, 79, 84].forEach(function (m, i) { tone(sfxBus, t + i * 0.07, N(m), 0.3, "triangle", 0.12); }); noise(sfxBus, t + 0.45, 0.6, 0.05, 7000); tone(sfxBus, t + 0.5, N(84), 0.8, "sine", 0.09); },
     skill: function (skin, phase, stage) {
       var key = "sk_" + phase; if (!canPlay(key, phase === "fire" ? 3 : 2, phase === "hit" ? 0.08 : 0.05)) return;
@@ -175,10 +175,10 @@
       else if (kind === "corner") { tone(B, t, 1800, 0.06, "sine", 0.03, 1400); tone(B, t + 0.07, 1700, 0.06, "sine", 0.025, 1300); }
       else if (kind === "cancel") { tone(B, t, 500, 0.08, "sine", 0.03, 300); }
     },
-    squeak: function () {
+    squeak: function (near) { // near: 0..1，越远越轻
       if (!ctx) return; var t = now(); while (squeakTimes.length && t - squeakTimes[0] > 1) squeakTimes.shift();
-      if (squeakTimes.length >= 6 || !canPlay("squeak", 1, 0.08)) return; squeakTimes.push(t);
-      tone(sfxBus, t, 2200 + Math.random() * 1000, 0.05, "sine", 0.04, 3200);
+      if (squeakTimes.length >= 4 || !canPlay("squeak", 1, 0.08)) return; squeakTimes.push(t);
+      tone(sfxBus, t, 2200 + Math.random() * 1000, 0.05, "sine", 0.04 * (near == null ? 1 : 0.25 + 0.75 * near), 3200);
     },
     panic: function () { if (!canPlay("panic", 2, 0.3)) return; var t = now(); for (var i = 0; i < 6; i++) tone(sfxBus, t + i * 0.045 + Math.random() * 0.02, 2000 + Math.random() * 1500, 0.045, "sine", 0.03, 3200); },
     sparkle: function () { if (!canPlay("sparkle", 1, 1.5)) return; var t = now(); for (var i = 0; i < 4; i++) tone(sfxBus, t + i * 0.08, 3000 + i * 400, 0.1, "sine", 0.025); },

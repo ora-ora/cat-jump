@@ -10,13 +10,13 @@
 </head>
 <body>
 <div id="app">
-  <canvas id="game"></canvas>
+  <canvas id="game" role="img" aria-label="游戏画面：小猫在草地上抓老鼠"></canvas>
 
   <div id="hud" class="hidden">
     <div id="hudLeft">
-      <div id="scoreText" class="hud-pill">0</div>
+      <div id="scoreText" class="hud-pill" aria-label="得分" aria-live="off">0</div>
       <div id="comboText" class="hidden"></div>
-      <div id="rankText" class="hud-pill small">排名：--</div>
+      <div id="rankText" class="hud-pill small">排名：未上榜</div>
       <div id="abilityBadge" class="hud-pill small ability-badge" role="button" tabindex="0" aria-label="查看技能图鉴（暂停）"></div>
     </div>
     <div id="hudRight">
@@ -60,6 +60,12 @@
         <label><input type="checkbox" id="bgmOn"> 🎵 音乐</label><input type="range" id="bgmVol" min="0" max="100" aria-label="音乐音量">
         <label><input type="checkbox" id="sfxOn"> 🔔 音效</label><input type="range" id="sfxVol" min="0" max="100" aria-label="音效音量">
       </div>
+      <div class="game-set" id="gameSet">
+        <label><input type="checkbox" id="shakeOn"> 📳 震动 / 屏幕抖动</label>
+        <label><input type="checkbox" id="reduceMotion"> 🐢 减少动效</label>
+        <label><input type="checkbox" id="joystickOn"> 🕹️ 虚拟摇杆</label>
+        <label><input type="checkbox" id="cbMode"> 👁️ 色弱模式（金鼠加黑白虚线圈）</label>
+      </div>
     </div>
   </div>
 
@@ -82,16 +88,28 @@
         <div>本局最高连击：x<span id="resultCombo">0</span></div>
         <div>历史最高分：<span id="resultBest">0</span></div>
       </div>
-      <div id="resultRankStatus">结算中…</div>
+      <div id="resultRankStatus" aria-live="polite">结算中…</div>
+      <div id="resultGap" class="result-gap hidden" aria-live="polite"></div>
       <label class="nickname-label" for="nicknameInputResult">昵称（下一局生效）
         <input id="nicknameInputResult" type="text" maxlength="12" autocomplete="off">
       </label>
       <p class="nickname-hint hidden" id="nicknameHintResult">昵称包含不当词语，将使用默认昵称</p>
+      <button id="restartBtn" class="btn-primary btn-wide btn-big">再来一局 🐾</button>
       <div class="btn-row">
         <button id="showLeaderboardBtnResult" class="btn-secondary">查看排行榜</button>
-        <button id="restartBtn" class="btn-primary">再来一局</button>
       </div>
       <button id="homeBtn" class="btn-secondary">返回首页</button>
+    </div>
+  </div>
+
+  <div id="onboardScreen" class="overlay hidden" role="dialog" aria-modal="true" aria-label="新手引导">
+    <div class="panel onboard-panel">
+      <div class="ob-ic" aria-hidden="true"></div>
+      <h2 class="ob-t"></h2>
+      <p class="ob-d"></p>
+      <div class="ob-dots" aria-hidden="true"></div>
+      <button id="onboardNext" class="btn-primary btn-wide"></button>
+      <button id="onboardSkip" class="btn-secondary">跳过</button>
     </div>
   </div>
 
