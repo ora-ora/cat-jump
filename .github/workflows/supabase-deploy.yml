@@ -36,3 +36,18 @@ jobs:
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
           SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+
+      # Worker 代理的签名密钥：写入私有表 private_settings（值来自 GitHub secret，日志里会被遮蔽；没配置就跳过）
+      - name: Sync proxy signing secret
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_ID: ${{ secrets.SUPABASE_PROJECT_ID }}
+          CAT_PROXY_SECRET: ${{ secrets.CAT_PROXY_SECRET }}
+        run: |
+          if [ -z "$CAT_PROXY_SECRET" ]; then echo "CAT_PROXY_SECRET not set, skipping"; exit 0; fi
+          case "$CAT_PROXY_SECRET" in *[!0-9a-f]*) echo "secret must be hex"; exit 1;; esac
+          body=$(jq -n --arg s "$CAT_PROXY_SECRET" --arg k "'proxy_secret'" '{query: ("insert into private_settings(key,value,updated_at) values (" + $k + ", $q$" + $s + "$q$, now()) on conflict (key) do update set value = excluded.value, updated_at = now()")}')
+          code=$(curl -s -o /tmp/q.out -w '%{http_code}' -X POST "https://api.supabase.com/v1/projects/$SUPABASE_PROJECT_ID/database/query" \
+            -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" -H "Content-Type: application/json" -d "$body")
+          echo "query status $code"; [ "$code" -lt 300 ]
+
