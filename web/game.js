@@ -3033,15 +3033,15 @@
           if (CA.sfx.uni) CA.sfx.uni("wave");
         }
         if (st >= 4) uni.cd = 0;
-        if (!L.chain) uni.chainLeft = Math.min(5, st + 1) - 1;
-        if (uni.chainLeft > 0) uni.chainWin = 0.4;
+        if (!L.chain) uni.chainLeft = [2, 2, 3, 4, 5][st - 1] - 1;
+        uni.chainWin = uni.chainLeft > 0 ? 0.4 : 0;
       } else { uni.chainLeft = 0; uni.chainWin = 0; }
     }
     if (!uni.lunge && moving) {
       if (uni.chainWin > 0) {
         uni.chainWin -= dt;
         var cm = uniFind(80 * esm, Math.PI / 2);
-        if (cm) { uni.chainLeft--; uniStartLunge(cm, true); }
+        if (cm && uni.chainLeft > 0) { uni.chainLeft--; uni.chainWin = 0; uniStartLunge(cm, true); }
         else if (uni.chainWin <= 0) uni.chainLeft = 0;
       } else if (uni.cd <= 0) {
         var pm = uniFind((st >= 2 ? 70 : 60) * esm, Math.PI / 3);
