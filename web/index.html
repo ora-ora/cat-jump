@@ -16,8 +16,10 @@
     <div id="hudLeft">
       <div id="scoreText" class="hud-pill" aria-label="得分" aria-live="off">0</div>
       <div id="comboText" class="hidden"></div>
-      <div id="rankText" class="hud-pill small">排名：未上榜</div>
-      <div id="dayText" class="hud-pill small day-pill" aria-live="off">☀️ 白天 2:00</div>
+      <div class="hud-row">
+        <div id="rankText" class="hud-pill small">排名：未上榜</div>
+        <div id="dayText" class="hud-pill small day-pill" aria-live="off">☀️ 白天 2:00</div>
+      </div>
       <div id="abilityBadge" class="hud-pill small ability-badge" role="button" tabindex="0" aria-label="查看技能图鉴（暂停）"></div>
     </div>
     <div id="hudRight">
@@ -85,11 +87,11 @@
     <div class="panel">
       <h2>本局结算</h2>
       <div class="result-stats">
-        <div>得分：<span id="resultScore">0</span></div>
-        <div>捕获数：<span id="resultCatches">0</span></div>
-        <div>游玩时长：<span id="resultDuration">0</span> 秒</div>
-        <div>本局最高连击：x<span id="resultCombo">0</span></div>
-        <div>历史最高分：<span id="resultBest">0</span></div>
+        <div>本局得分<span id="resultScore">0</span></div>
+        <div>捕获老鼠<span id="resultCatches">0</span></div>
+        <div>游玩时长（秒）<span id="resultDuration">0</span></div>
+        <div>最高连击<span id="resultCombo">0</span></div>
+        <div>历史最高<span id="resultBest">0</span></div>
       </div>
       <div id="resultRankStatus" aria-live="polite">结算中…</div>
       <div id="resultGap" class="result-gap hidden" aria-live="polite"></div>

@@ -379,10 +379,13 @@
 
   var camera = { x: 0, y: 0 };
 
+  var camLook = { x: 0, y: 0 };
   function updateCamera(dt) {
     var smoothing = 1 - Math.exp(-dt * 6);
-    camera.x += (cat.x - camera.x) * smoothing;
-    camera.y += (cat.y - camera.y) * smoothing;
+    // v13 A8：镜头前瞻——朝移动方向多看一点（关掉"减少动效"时生效）
+    var la = reducedMotion ? 0 : 55 * entityScaleMult; camLook.x += ((moveDir.x || 0) * la - camLook.x) * (1 - Math.exp(-dt * 2.2)); camLook.y += ((moveDir.y || 0) * la - camLook.y) * (1 - Math.exp(-dt * 2.2));
+    camera.x += (cat.x + camLook.x - camera.x) * smoothing;
+    camera.y += (cat.y + camLook.y - camera.y) * smoothing;
     clampCamera();
   }
 
@@ -1897,18 +1900,39 @@
   function quant(v) { return Math.max(0.05, Math.round(v * 50) / 50); }
 
   // v9：地面棋盘格缓存成离屏 2×2 瓦片 + 平铺 pattern，一次 fillRect 画满全屏
-  var groundPat = null, groundKey = "";
+  // v13 A1：手绘感草地（离屏一次性绘制、无缝平铺）+ 大尺度树荫/光斑层打散重复感
+  var GRASS_T = 512, DAPPLE_T = 1400, grassCv = null, dappleCv = null, groundPat = null, dapplePat = null;
+  function wrapDraw(g, T, x, y, r, fn) { for (var ox = -1; ox <= 1; ox++) for (var oy = -1; oy <= 1; oy++) { var X = x + ox * T, Y = y + oy * T; if (X + r < 0 || X - r > T || Y + r < 0 || Y - r > T) continue; fn(X, Y); } }
+  function makeGrass(q) {
+    var T = GRASS_T, c = document.createElement("canvas"); c.width = c.height = T * q; var g = c.getContext("2d"), R = mulberry(7), i; g.scale(q, q);
+    g.fillStyle = "#a4d986"; g.fillRect(0, 0, T, T);
+    var tones = ["#9ad37b", "#b0e190", "#bde89e", "#a6da86", "#c6ecA4", "#a2d781"];
+    for (i = 0; i < 260; i++) { var x = R() * T, y = R() * T, r = 18 + R() * 52, col = tones[(R() * tones.length) | 0];
+      wrapDraw(g, T, x, y, r, function (X, Y) { var gr = g.createRadialGradient(X, Y, 0, X, Y, r); gr.addColorStop(0, col); gr.addColorStop(1, "rgba(164,217,134,0)"); g.globalAlpha = 0.32; g.fillStyle = gr; g.beginPath(); g.ellipse(X, Y, r, r * 0.7, 0, 0, 7); g.fill(); }); }
+    g.globalAlpha = 1; g.lineCap = "round";
+    for (i = 0; i < 1500; i++) { var x2 = R() * T, y2 = R() * T, l = 3 + R() * 6, a = -Math.PI / 2 + (R() - 0.5) * 0.9, dark = R() < 0.55;
+      g.strokeStyle = dark ? "rgba(80,150,62," + (0.22 + R() * 0.25) + ")" : "rgba(220,250,190," + (0.2 + R() * 0.3) + ")"; g.lineWidth = 1 + R() * 1.2;
+      wrapDraw(g, T, x2, y2, l, function (X, Y) { g.beginPath(); g.moveTo(X, Y); g.quadraticCurveTo(X + Math.cos(a) * l * 0.5 + 1.5, Y + Math.sin(a) * l * 0.5, X + Math.cos(a) * l, Y + Math.sin(a) * l); g.stroke(); }); }
+    for (i = 0; i < 26; i++) { var x3 = R() * T, y3 = R() * T, cl = R() < 0.5 ? "#7fbf62" : "#d9f5b8";
+      wrapDraw(g, T, x3, y3, 6, function (X, Y) { g.fillStyle = cl; for (var q = 0; q < 3; q++) { g.beginPath(); g.arc(X + Math.cos(q * 2.1) * 2.2, Y + Math.sin(q * 2.1) * 2.2, 1.9, 0, 7); g.fill(); } }); }
+    return c;
+  }
+  function makeDapple() {
+    var T = DAPPLE_T, c = document.createElement("canvas"); c.width = c.height = T / 4; var g = c.getContext("2d"), R = mulberry(11), k = 0.25;
+    for (var i = 0; i < 22; i++) { var x = R() * T, y = R() * T, r = 120 + R() * 220, sh = R() < 0.6;
+      wrapDraw(g, T, x, y, r, function (X, Y) { var gr = g.createRadialGradient(X * k, Y * k, 0, X * k, Y * k, r * k); gr.addColorStop(0, sh ? "rgba(40,90,40,0.11)" : "rgba(255,252,210,0.14)"); gr.addColorStop(1, "rgba(0,0,0,0)"); g.fillStyle = gr; g.fillRect(0, 0, T * k, T * k); }); }
+    return c;
+  }
+  function mulberry(a) { return function () { a |= 0; a = a + 0x6D2B79F5 | 0; var t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
   function drawGround() {
-    var t = TILE * SCALE, key = t.toFixed(3) + "|" + DPR;
-    if (key !== groundKey) {
-      var tp = Math.max(2, Math.round(t * DPR)), c = document.createElement("canvas"); c.width = tp * 2; c.height = tp * 2;
-      var g = c.getContext("2d"); g.fillStyle = "#a8de8e"; g.fillRect(0, 0, tp * 2, tp * 2); g.fillStyle = "#b8e6a0"; g.fillRect(tp, 0, tp, tp); g.fillRect(0, tp, tp, tp);
-      groundPat = ctx.createPattern(c, "repeat"); groundKey = key; groundPat._tp = tp;
-    }
-    if (groundPat && groundPat.setTransform && window.DOMMatrix) {
-      var ox = worldToScreenX(0), oy = worldToScreenY(0), k2 = t / groundPat._tp;
-      groundPat.setTransform(new DOMMatrix([k2, 0, 0, k2, ox, oy]));
+    var q = resScale < 1 ? 0.5 : 2; // 弱设备用低清草地贴图（填充更省）
+    if (!grassCv || grassCv._q !== q) { grassCv = makeGrass(q); grassCv._q = q; groundPat = null; if (!dappleCv) dappleCv = makeDapple(); }
+    if (!groundPat) { groundPat = ctx.createPattern(grassCv, "repeat"); dapplePat = ctx.createPattern(dappleCv, "repeat"); }
+    if (groundPat.setTransform && window.DOMMatrix) {
+      var ox = worldToScreenX(0), oy = worldToScreenY(0);
+      groundPat.setTransform(new DOMMatrix([SCALE / q, 0, 0, SCALE / q, ox, oy]));
       ctx.fillStyle = groundPat; ctx.fillRect(0, 0, W, H);
+      if (resScale >= 1 && dayNow.night < 0.5) { dapplePat.setTransform(new DOMMatrix([SCALE * 4, 0, 0, SCALE * 4, ox, oy])); ctx.fillStyle = dapplePat; ctx.fillRect(0, 0, W, H); }
       return;
     }
     ctx.fillStyle = "#a8de8e";
@@ -2107,8 +2131,11 @@
     ctx.restore();
   }
 
+  // v13 A3：柔和接触阴影（径向渐变缓存），统一光源在左上 → 影子略偏右下
+  var shadowCv = null;
+  function shadowSprite() { if (shadowCv) return shadowCv; var c = document.createElement("canvas"); c.width = 128; c.height = 40; var g = c.getContext("2d"); g.translate(64, 20); g.scale(1, 0.3125); var gr = g.createRadialGradient(0, 0, 0, 0, 0, 62); gr.addColorStop(0, "rgba(30,70,25,0.42)"); gr.addColorStop(0.55, "rgba(30,70,25,0.24)"); gr.addColorStop(1, "rgba(30,70,25,0)"); g.fillStyle = gr; g.beginPath(); g.arc(0, 0, 62, 0, 7); g.fill(); return (shadowCv = c); }
   function shadow(x, y, rx) {
-    ART.ellipse(ctx, x, y, rx, rx * 0.28, "rgba(40,90,30,0.2)");
+    var w = rx * 2.5; ctx.drawImage(shadowSprite(), x - w / 2 + rx * 0.12, y - w * 0.156 + rx * 0.05, w, w * 0.3125);
   }
 
   function drawDust() {
@@ -2227,9 +2254,7 @@
     vis.sort(function (a, b) { return a.sy - b.sy; });
     drawStats.drawn = vis.length; drawStats.full = 0;
     if (!dbgDraw.noShadow) { // 阴影合并成一次 fill
-      ctx.fillStyle = "rgba(40,90,30,0.2)"; ctx.beginPath();
-      for (var q = 0; q < vis.length; q++) { var vm = vis[q].m, uu = s(vm.r) * MOUSE_UNIT_PER_R, rx = (vm.anim && vm.anim.mode === "run" ? 20 : 16) * uu; ctx.moveTo(vis[q].sx + rx, vis[q].sy + 24 * uu); ctx.ellipse(vis[q].sx, vis[q].sy + 24 * uu, rx, rx * 0.28, 0, 0, Math.PI * 2); }
-      ctx.fill();
+      for (var q = 0; q < vis.length; q++) { var vm = vis[q].m, uu = s(vm.r) * MOUSE_UNIT_PER_R, rx = (vm.anim && vm.anim.mode === "run" ? 20 : 16) * uu; shadow(vis[q].sx, vis[q].sy + 24 * uu, rx); }
     }
     var cut20 = Infinity; if (vis.length > 20) { var d20 = vis.map(function (v) { return v.d; }).sort(function (a, b) { return a - b; }); cut20 = d20[19]; }
     for (var k = 0; k < vis.length; k++) {
@@ -2243,7 +2268,7 @@
       var ox = 0;
       if (m.cornerT > 0 || m.trem > 0 || (m.beh === "timid" && m.state === "flee" && v.full)) ox = Math.sin(elapsedPlayTime * 60) * 2 * u;
       if (m.asleep) st = ["sit", 2];
-      if (dayNow.night > 0.5 && mouseInDark(m)) { var ea = 0.5 + 0.5 * dayNow.night; ctx.fillStyle = "rgba(255,240,120," + ea + ")"; ctx.fillRect(sx - 5 * u - 2, sy - 8 * u - 2, 4, 4); ctx.fillRect(sx + 5 * u - 2, sy - 8 * u - 2, 4, 4); continue; }
+      if (dayNow.night > 0.5 && mouseInDark(m)) { var ea = 0.5 + 0.5 * dayNow.night; var blk = Math.sin(elapsedPlayTime * 2.3 + m.seed * 11) > 0.96; if (!blk) { var gw = glowSprite(), gs = s(9); ctx.globalAlpha = ea; ctx.drawImage(gw, sx - 5 * u - gs / 2, sy - 8 * u - gs / 2, gs, gs); ctx.drawImage(gw, sx + 5 * u - gs / 2, sy - 8 * u - gs / 2, gs, gs); ctx.globalAlpha = 1; ctx.fillStyle = "#fff8c0"; ctx.beginPath(); ctx.arc(sx - 5 * u, sy - 8 * u, s(1.6), 0, 7); ctx.arc(sx + 5 * u, sy - 8 * u, s(1.6), 0, 7); ctx.fill(); } continue; }
       if (!dbgDraw.noSprite) blit(ANIM.mouseSprite(m.type, d[0], st[0], st[1], spritePx(u)), sx + ox, sy, u, d[1]);
       if (!dbgDraw.noTell && (v.full || m.type === "gold" || m.packId)) drawTell(m, sx + ox, sy, u, st, v.full, v.i);
     }
@@ -3119,8 +3144,11 @@
     if (combo >= 2) {
       dom.comboText.classList.remove("hidden");
       setText(dom.comboText, "连击 x" + combo);
+      dom.comboText.style.setProperty("--cb", (comboTimer / COMBO_WINDOW).toFixed(2));
+      var tier = combo >= 20 ? 3 : combo >= 10 ? 2 : combo >= 5 ? 1 : 0;
+      if (dom.comboText._tier !== tier) { dom.comboText._tier = tier; dom.comboText.className = "tier" + tier + (dom.comboText.classList.contains("tier-pop") ? " tier-pop" : ""); }
     } else {
-      dom.comboText.classList.add("hidden");
+      dom.comboText.classList.add("hidden"); dom.comboText._tier = -1;
     }
   }
 
@@ -3390,15 +3418,50 @@
   }
   // 夜晚：整体压暗 + 猫身边暖光圈 + 星星；黄昏/黎明偏橙
   var STARS = []; for (var si = 0; si < 40; si++) STARS.push([Math.random(), Math.random() * 0.45, 0.4 + Math.random() * 0.6]);
+  // v13 A4：移轴景深感（上下边缘柔光雾 + 暗角），预渲染一张屏幕大小的图；弱设备（降分辨率后）关闭
+  var depthCv = null, depthKey = "";
+  function drawDepth() {
+    if (resScale < 1 || dayNow.night > 0.5) return; // 夜晚已有暗角，不再叠加
+    var key = W + "x" + H + "|" + (dayNow.night > 0.5 ? 1 : 0);
+    if (key !== depthKey) {
+      depthKey = key; var c = depthCv || document.createElement("canvas"), sc = 0.5; c.width = Math.ceil(W * sc); c.height = Math.ceil(H * sc); var g = c.getContext("2d"), w = c.width, h = c.height;
+      g.clearRect(0, 0, w, h); var night = dayNow.night > 0.5, hz = night ? "20,30,70" : "255,248,225";
+      var t = g.createLinearGradient(0, 0, 0, h); t.addColorStop(0, "rgba(" + hz + ",0.38)"); t.addColorStop(0.16, "rgba(" + hz + ",0)"); t.addColorStop(0.84, "rgba(" + hz + ",0)"); t.addColorStop(1, "rgba(" + hz + ",0.32)");
+      g.fillStyle = t; g.fillRect(0, 0, w, h);
+      var v = g.createRadialGradient(w / 2, h / 2, Math.min(w, h) * 0.42, w / 2, h / 2, Math.max(w, h) * 0.75); v.addColorStop(0, "rgba(40,30,10,0)"); v.addColorStop(1, night ? "rgba(5,8,25,0.35)" : "rgba(60,40,10,0.22)");
+      g.fillStyle = v; g.fillRect(0, 0, w, h); depthCv = c;
+    }
+    var cw = depthCv.width, ch = depthCv.height, bh = Math.ceil(ch * 0.2); // 只画上下两条 + 四角暗角（中间透明区不画，省填充）
+    ctx.drawImage(depthCv, 0, 0, cw, bh, 0, 0, W, H * bh / ch);
+    ctx.drawImage(depthCv, 0, ch - bh, cw, bh, 0, H - H * bh / ch, W, H * bh / ch);
+  }
   function drawNight() {
     var k = dayNow.night; if (k <= 0.001) return;
     var sx = worldToScreenX(cat.x), sy = worldToScreenY(cat.y), r1 = s(190 * entityScaleMult), r0 = s(60 * entityScaleMult);
     if (dayNow.phase === "dusk" || dayNow.phase === "dawn") { ctx.fillStyle = "rgba(255,140,60," + (0.18 * Math.sin(k * Math.PI)) + ")"; ctx.fillRect(0, 0, W, H); }
     var g = ctx.createRadialGradient(sx, sy, r0, sx, sy, r1);
-    g.addColorStop(0, "rgba(10,15,50,0)"); g.addColorStop(1, "rgba(10,15,50," + (0.62 * k) + ")");
+    g.addColorStop(0, "rgba(25,45,110," + (0.16 * k) + ")"); g.addColorStop(1, "rgba(12,26,70," + (0.7 * k) + ")");
     ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
-    ctx.fillStyle = "rgba(255,250,215," + (0.12 * k) + ")"; ctx.beginPath(); ctx.arc(sx, sy, r0 * 1.4, 0, 7); ctx.fill();
+    ctx.fillStyle = "rgba(255,240,200," + (0.05 * k) + ")"; ctx.beginPath(); ctx.arc(sx, sy, r0 * 1.4, 0, 7); ctx.fill();
     if (k > 0.5) for (var i = 0; i < STARS.length; i++) { var st = STARS[i], tw = reducedMotion ? 1 : 0.6 + 0.4 * Math.sin(elapsedPlayTime * 2 + i); ctx.fillStyle = "rgba(255,255,220," + (st[2] * tw * (k - 0.5) * 2) + ")"; ctx.fillRect(st[0] * W, 60 + st[1] * H, 2, 2); }
+  }
+  // v13 A6：夜晚萤火虫 + 小猫身边的暖色灯光（加色混合）；弱设备不画萤火虫
+  var glowCv = null, flies = [];
+  function glowSprite() { if (glowCv) return glowCv; var c = document.createElement("canvas"); c.width = c.height = 64; var g = c.getContext("2d"), gr = g.createRadialGradient(32, 32, 0, 32, 32, 32); gr.addColorStop(0, "rgba(255,250,190,1)"); gr.addColorStop(0.25, "rgba(255,230,120,.65)"); gr.addColorStop(1, "rgba(255,200,80,0)"); g.fillStyle = gr; g.fillRect(0, 0, 64, 64); return (glowCv = c); }
+  function drawNightGlow() {
+    var k = dayNow.night; if (k <= 0.05 || resScale < 1) return;
+    var sx = worldToScreenX(cat.x), sy = worldToScreenY(cat.y), r = s(150 * entityScaleMult);
+    ctx.save(); ctx.globalCompositeOperation = "lighter";
+    var g = ctx.createRadialGradient(sx, sy, 0, sx, sy, r); g.addColorStop(0, "rgba(255,150,60," + (0.16 * k) + ")"); g.addColorStop(0.6, "rgba(255,120,40," + (0.06 * k) + ")"); g.addColorStop(1, "rgba(255,150,50,0)");
+    ctx.fillStyle = g; ctx.fillRect(sx - r, sy - r, r * 2, r * 2);
+    if (resScale >= 1 && !reducedMotion) {
+      var n = Math.round(22 * k); while (flies.length < n) flies.push({ x: Math.random(), y: Math.random(), p: Math.random() * 6.28, sp: 0.4 + Math.random() * 0.6 });
+      var gw = glowSprite(), t = elapsedPlayTime;
+      for (var i = 0; i < n; i++) { var f = flies[i]; var fx = ((f.x + Math.sin(t * 0.13 * f.sp + f.p) * 0.06 - (camera.x * 0.00015)) % 1 + 1) % 1 * W, fy = ((f.y + Math.cos(t * 0.11 * f.sp + f.p * 1.3) * 0.05 - (camera.y * 0.00015)) % 1 + 1) % 1 * H;
+        var tw = 0.35 + 0.65 * Math.max(0, Math.sin(t * 2 * f.sp + f.p)), z = s(26 + 14 * f.sp); ctx.globalAlpha = tw * k; ctx.drawImage(gw, fx - z / 2, fy - z / 2, z, z); ctx.drawImage(gw, fx - z / 6, fy - z / 6, z / 3, z / 3); }
+      ctx.globalAlpha = 1;
+    }
+    ctx.restore();
   }
   function mouseInDark(m) { return dayNow.night > 0.5 && distance(m.x, m.y, cat.x, cat.y) > 200 * entityScaleMult; }
   // 屏幕外最近 3 个窝：边缘箭头
@@ -3646,6 +3709,8 @@
     drawCat();
     drawAbilityOverlay();
     drawNight();
+    drawNightGlow();
+    drawDepth();
     drawPoopRing();
     drawEffects();
     drawJuice();
