@@ -588,7 +588,7 @@
   }
 
   function resetScoring() {
-    uniReset(); score = 0; catches = 0; catchesGrey = 0; catchesBrown = 0; catchesGold = 0;
+    uniReset(); score = 0; catches = 0; catchesGrey = 0; catchesBrown = 0; catchesGold = 0; missionsInit();
     combo = 0; comboTimer = 0; comboMax = 0; elapsedPlayTime = 0; hitStopT = 0; hitStopCd = 0; impacts.length = 0; flyers.length = 0; comboBanner = null; comboRings.length = 0;
   }
 
@@ -2168,6 +2168,109 @@
     ctx.globalAlpha = 1;
   }
 
+  // v13 A2：橘子改用手绘精灵（img/orange_*.png，正面/侧面/背面 3 张），动作用弹跳 + 挤压拉伸做；其它 5 只猫暂保留原画
+  var PAINTED = { front: null, side: null, back: null }, paintedReady = 0;
+  ["front", "side", "back"].forEach(function (k) { var im = new Image(); im.onload = function () { PAINTED[k] = im; paintedReady++; if (paintedReady === 3) setTimeout(function () { try { paintSkinCards(); } catch (e) {} }, 0); }; im.src = "img/orange_" + k + ".png?v=" + (window.CAT_BUILD && window.CAT_BUILD.sha || "1"); });
+  function paintedCat(x, y, u, view, flip, st, breathe, runCycle) {
+    if (paintedReady < 3) return false;
+    var run = st[0] === "run", back = view === "back" || view === "b34", gul = st[0] === "gulp";
+    var key = back ? "back" : (run && (view === "side" || view === "q34")) ? "side" : "front", im = PAINTED[key];
+    var H = (key === "side" ? 84 : 98) * u, Wd = H * im.width / im.height;
+    var bob = 0, sx = 1, sy = 1, rot = 0;
+    if (run) { var ph = runCycle * 2.4; bob = Math.abs(Math.sin(ph)) * 7 * u; sy = 1 - Math.cos(ph * 2) * 0.04; sx = 2 - sy; rot = key === "side" ? Math.sin(ph) * 0.07 : Math.sin(ph) * 0.05; }
+    else if (gul) { var gk = st[1]; sy = [1, 0.9, 1.08, 0.95, 1][gk] || 1; sx = 2 - sy; }
+    else { sx = 1 - breathe * 0.5; sy = 1 + breathe; }
+    ctx.save(); ctx.translate(x, y + 46 * u - bob); ctx.rotate(rot); ctx.scale((key === "side" ? flip : 1) * sx, sy);
+    ctx.drawImage(im, -Wd / 2, -H, Wd, H); ctx.restore();
+    return true;
+  }
+  // ==== v13 B4 每局 3 个小任务（只给星星，不影响分数）+ B7 小鱼干（仅本地）& 帽子小铺 ====
+  var MISSION_POOL = [
+    { id: "c30", t: "抓住 30 只老鼠", n: 30, v: function () { return catches; } },
+    { id: "c60", t: "抓住 60 只老鼠", n: 60, v: function () { return catches; } },
+    { id: "g2", t: "抓住 2 只金老鼠", n: 2, v: function () { return catchesGold; } },
+    { id: "b8", t: "抓住 8 只棕老鼠", n: 8, v: function () { return catchesBrown; } },
+    { id: "k10", t: "打出 10 连击", n: 10, v: function () { return comboMax; } },
+    { id: "k20", t: "打出 20 连击", n: 20, v: function () { return comboMax; } },
+    { id: "n1", t: "便便摧毁 1 个老鼠窝", n: 1, v: function () { return nestStats.destroyed; } },
+    { id: "night", t: "坚持到夜晚", n: 1, v: function () { return dayNow.night > 0.5 ? 1 : 0; } }
+  ];
+  var missions = [], missionEl = null;
+  function lsNum(k) { var v = parseInt(storageGet(k, "0"), 10); return isFinite(v) ? v : 0; }
+  function missionsInit() {
+    var pool = MISSION_POOL.slice(), pick = [];
+    while (pick.length < 3 && pool.length) { var m = pool.splice((Math.random() * pool.length) | 0, 1)[0]; if (pick.some(function (p) { return p.id.charAt(0) === m.id.charAt(0); })) continue; pick.push(m); }
+    missions = pick.map(function (m) { return { m: m, done: false, p: 0 }; });
+    if (!missionEl) { missionEl = document.createElement("div"); missionEl.id = "missionChip"; missionEl.className = "hud-pill small mission-chip"; var row = document.querySelector("#hudLeft .hud-row"); if (row && row.parentNode) row.parentNode.insertBefore(missionEl, row.nextSibling); }
+    missionEl._k = "";
+  }
+  function missionsUpdate() {
+    if (!missions.length) return;
+    var cur = null, ndone = 0;
+    for (var i = 0; i < missions.length; i++) { var q = missions[i]; q.p = Math.min(q.m.n, q.m.v());
+      if (!q.done && q.p >= q.m.n) { q.done = true; showEvoBanner("⭐ 任务完成！", q.m.t); if (CA.sfx.tier) CA.sfx.tier(5); }
+      if (q.done) ndone++; else if (!cur) cur = q; }
+    if (!missionEl) return;
+    var txt = cur ? "🎯 " + cur.m.t + " " + cur.p + "/" + cur.m.n + " · ⭐" + ndone + "/3" : "🌟 本局任务全部完成！";
+    if (missionEl._k !== txt) { missionEl._k = txt; missionEl.textContent = txt; missionEl.classList.toggle("all", !cur); }
+  }
+  function missionsResult() {
+    missionsUpdate();
+    var stars = missions.filter(function (q) { return q.done; }).length, fish = Math.floor(score / 25) + stars * 10;
+    storageSet("catmouse_fish", String(lsNum("catmouse_fish") + fish)); storageSet("catmouse_stars", String(lsNum("catmouse_stars") + stars));
+    var box = document.getElementById("resultMissions");
+    if (!box) { box = document.createElement("div"); box.id = "resultMissions"; box.className = "result-missions"; var st = document.querySelector("#resultScreen .result-stats"); st.parentNode.insertBefore(box, st.nextSibling); }
+    box.innerHTML = "";
+    var h = document.createElement("div"); h.className = "rm-head"; h.textContent = "本局任务 " + "★".repeat(stars) + "☆".repeat(3 - stars); box.appendChild(h);
+    missions.forEach(function (q) { var d = document.createElement("div"); d.className = "rm-row" + (q.done ? " ok" : ""); d.textContent = (q.done ? "✅ " : "⬜ ") + q.m.t + "（" + q.p + "/" + q.m.n + "）"; box.appendChild(d); });
+    var r = document.createElement("div"); r.className = "rm-reward"; r.textContent = "🐟 获得小鱼干 +" + fish + "（共 " + lsNum("catmouse_fish") + "）· 可在首页「小铺」换帽子"; box.appendChild(r);
+    updateShopBtn();
+  }
+  var HATS = [
+    { id: "bow", e: "🎀", name: "蝴蝶结", cost: 60 }, { id: "straw", e: "👒", name: "小草帽", cost: 120 }, { id: "cap", e: "🧢", name: "棒球帽", cost: 150 },
+    { id: "top", e: "🎩", name: "魔术礼帽", cost: 200 }, { id: "crown", e: "👑", name: "小皇冠", cost: 320 }
+  ];
+  function hatsOwned() { try { return JSON.parse(storageGet("catmouse_hats", "[]")) || []; } catch (e) { return []; } }
+  var hatCache;
+  function hatOn() { if (hatCache !== undefined) return hatCache; hatCache = null; var h = storageGet("catmouse_hat", ""); for (var i = 0; i < HATS.length; i++) if (HATS[i].id === h) hatCache = HATS[i]; return hatCache; }
+  function drawHat(x, y, r, a) {
+    var h = hatOn(); if (!h) return;
+    var u = r * CAT_UNIT_PER_R, d = ANIM.DIR8[a.dir], view = d[0], flip = d[1], run = a.mode === "run";
+    var hx = x + (view === "side" ? 14 * flip : view === "q34" ? 6 * flip : 0) * u, hy = y - (run && view === "side" ? 36 : 48) * u;
+    if (run && !reducedMotion) hy -= Math.abs(Math.sin(cat.runCycle * 2.4)) * 7 * u;
+    emojiQuick(h.e, hx, hy, 30 * u);
+  }
+  function updateShopBtn() { var b = document.getElementById("shopBtn"); if (b) b.textContent = "🛍️ 小铺 · 🐟" + lsNum("catmouse_fish"); }
+  function openShop() {
+    var ov = document.getElementById("shopScreen");
+    if (!ov) {
+      ov = document.createElement("div"); ov.id = "shopScreen"; ov.className = "overlay"; ov.setAttribute("role", "dialog"); ov.setAttribute("aria-label", "帽子小铺");
+      ov.innerHTML = '<div class="panel shop-panel"><h2>🛍️ 帽子小铺</h2><div class="shop-bal"></div><div class="shop-grid"></div><p class="shop-note">小鱼干只存在这台设备上，只换装扮，不影响分数和排行榜。</p><button class="btn-primary shop-close">好啦</button></div>';
+      document.getElementById("app").appendChild(ov);
+      ov.querySelector(".shop-close").onclick = function () { sfx.click(); ov.classList.add("hidden"); updateShopBtn(); };
+    }
+    var grid = ov.querySelector(".shop-grid"), fish = lsNum("catmouse_fish"), own = hatsOwned(), on = storageGet("catmouse_hat", "");
+    ov.querySelector(".shop-bal").textContent = "🐟 小鱼干 " + fish + " · ⭐ 累计星星 " + lsNum("catmouse_stars");
+    grid.innerHTML = "";
+    [{ id: "", e: "🚫", name: "不戴", cost: 0 }].concat(HATS).forEach(function (h) {
+      var have = !h.id || own.indexOf(h.id) >= 0, b = document.createElement("button"); b.type = "button"; b.className = "shop-item" + (on === h.id ? " on" : "") + (have ? "" : " lock");
+      b.innerHTML = '<span class="si-e"></span><b></b><small></small>'; b.children[0].textContent = h.e; b.children[1].textContent = h.name;
+      b.children[2].textContent = on === h.id ? "戴着" : have ? "戴上" : "🐟 " + h.cost;
+      if (!have && fish < h.cost) b.classList.add("poor");
+      b.onclick = function () {
+        sfx.click();
+        if (!have) { if (lsNum("catmouse_fish") < h.cost) return; storageSet("catmouse_fish", String(lsNum("catmouse_fish") - h.cost)); own.push(h.id); storageSet("catmouse_hats", JSON.stringify(own)); }
+        storageSet("catmouse_hat", h.id); hatCache = undefined; openShop();
+      };
+      grid.appendChild(b);
+    });
+    ov.classList.remove("hidden");
+  }
+  (function () {
+    var lb = document.getElementById("showLeaderboardBtnStart"); if (!lb) return;
+    var b = document.createElement("button"); b.id = "shopBtn"; b.type = "button"; b.className = "btn-secondary shop-btn"; lb.parentNode.insertBefore(b, lb.nextSibling);
+    b.onclick = function () { sfx.click(); openShop(); }; setTimeout(updateShopBtn, 0);
+  })();
   function drawCatAt(x, y, r, a, runCycle, skin, ghost) {
     var u = r * CAT_UNIT_PER_R;
     var gulp = ghost ? null : gulpState();
@@ -2180,6 +2283,7 @@
     var breathe = sitting ? Math.sin((a.t + a.phase) * 2.4) * 0.03 : 0;
     shadow(x, y + 46 * u, (st[0] === "run" ? 30 : 26) * u);
     if (!ghost) drawGulpMouse(x, y, u, view, flip, true);
+    if (skin === "orange" && paintedCat(x, y, u, view, flip, st, breathe, runCycle)) { if (!ghost) drawGulpMouse(x, y, u, view, flip, false); return; }
     blit(ANIM.catSprite(skin, view, st[0], st[1], spritePx(u)), x, y, u, flip, 1 - breathe * 0.5, 1 + breathe, 46);
     if (!ghost) drawGulpMouse(x, y, u, view, flip, false);
   }
@@ -2189,6 +2293,7 @@
     if (poopSitting() && !reducedMotion) sx += Math.sin(elapsedPlayTime * 50) * s(1.5);
     if (stc) { ctx.save(); ctx.translate(sx, sy); ctx.rotate(stc.a); ctx.scale(stc.s, 1 / Math.sqrt(stc.s)); ctx.rotate(-stc.a); ctx.translate(-sx, -sy); }
     drawCatAt(sx, sy, s(cat.r), catAnim, cat.runCycle, currentSkin);
+    drawHat(sx, sy, s(cat.r), catAnim);
     if (stc) ctx.restore();
   }
 
@@ -2942,6 +3047,7 @@
     dom.resultRankStatus.textContent = "结算中…"; var rg = document.getElementById("resultGap"); if (rg) rg.classList.add("hidden");
     dom.nicknameInputResult.value = storageGet("catmouse_nickname", "");
     dom.nicknameHintResult.classList.add("hidden");
+    missionsResult();
     showScreen(dom.resultScreen);
     sfx.endRun();
     finishRun();
@@ -3428,10 +3534,9 @@
       g.clearRect(0, 0, w, h); var night = dayNow.night > 0.5, hz = night ? "20,30,70" : "255,248,225";
       var t = g.createLinearGradient(0, 0, 0, h); t.addColorStop(0, "rgba(" + hz + ",0.38)"); t.addColorStop(0.16, "rgba(" + hz + ",0)"); t.addColorStop(0.84, "rgba(" + hz + ",0)"); t.addColorStop(1, "rgba(" + hz + ",0.32)");
       g.fillStyle = t; g.fillRect(0, 0, w, h);
-      var v = g.createRadialGradient(w / 2, h / 2, Math.min(w, h) * 0.42, w / 2, h / 2, Math.max(w, h) * 0.75); v.addColorStop(0, "rgba(40,30,10,0)"); v.addColorStop(1, night ? "rgba(5,8,25,0.35)" : "rgba(60,40,10,0.22)");
-      g.fillStyle = v; g.fillRect(0, 0, w, h); depthCv = c;
+      depthCv = c;
     }
-    var cw = depthCv.width, ch = depthCv.height, bh = Math.ceil(ch * 0.2); // 只画上下两条 + 四角暗角（中间透明区不画，省填充）
+    var cw = depthCv.width, ch = depthCv.height, bh = Math.ceil(ch * 0.2); // 只画上下两条渐变（中间透明区不画，省填充）
     ctx.drawImage(depthCv, 0, 0, cw, bh, 0, 0, W, H * bh / ch);
     ctx.drawImage(depthCv, 0, ch - bh, cw, bh, 0, H - H * bh / ch, W, H * bh / ch);
   }
@@ -3677,6 +3782,7 @@
       updateJuice(dt);
       updateAnims(dt);
       updateHud();
+      missionsUpdate(dt);
       updateMini(dt);
       refreshSnapshotIfDue(Date.now());
       maybeSendHeartbeat(Date.now());
@@ -3767,6 +3873,7 @@
     x.clearRect(0, 0, w, h);
     x.translate(w / 2, h * cy);
     x.scale(scale * w / 110, scale * w / 110);
+    if (skinId === "orange" && paintedReady >= 3) { var im = PAINTED.front, H = 96, Wd = H * im.width / im.height; x.drawImage(im, -Wd / 2, 46 - H, Wd, H); return; }
     window.CatArt.paintCat(x, window.CatArt.skinOf(skinId), opt || {});
   }
 
