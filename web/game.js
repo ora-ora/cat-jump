@@ -3062,6 +3062,7 @@
   var NEST_START = 8, NEST_MAX = 10, NEST_MIN_SPAWN_D = 500, NEST_SPACING = 450, NEST_EDGE = 150, NEST_RESPAWN = 45, NEST_ADD_EVERY = 90;
   var NEST_DAY_IV = 2.5, NEST_NIGHT_IV = 1.4, NEST_OWN_MAX = 12, NEST_ROAM = 350, NIGHT_CAP = 240;
   var DAY_T = 120, DUSK_T = 8, NIGHT_T = 60, DAWN_T = 8, CYCLE_T = DAY_T + DUSK_T + NIGHT_T + DAWN_T;
+  var NEST_HIDE_R = 220, NEST_HIDE_R_NIGHT = 160, NEST_STORE_MAX = 6; // 猫靠近窝：停止出鼠、鼠在窝里攒着（初始值，未平衡）
   var POOP_T = 3, POOP_R = 40, POOP_MIN_RUN = 20, NEST_SCORE = 30;
   var FENCES = [
     { x: -MAP_HALF - FENCE_T, y: -MAP_HALF - FENCE_T, w: 2 * MAP_HALF + 2 * FENCE_T, h: FENCE_T, kind: "fence" },
@@ -3101,7 +3102,7 @@
     nests.length = 0; poops.length = 0; nestStats.destroyed = 0; poopSit.t = 0; poopSit.nest = null; nestAddT = 0;
     for (var i = 0; i < NEST_START; i++) { var p = placeNest(0); if (p) nests.push(newNest(p)); }
   }
-  function newNest(p) { return { x: p.x, y: p.y, alive: true, t: Math.random() * 1.5, owned: 0, silT: 0, deadT: 0, born: elapsedPlayTime, prefilled: false, flash: 0 }; }
+  function newNest(p) { return { x: p.x, y: p.y, alive: true, t: Math.random() * 1.5, owned: 0, silT: 0, deadT: 0, born: elapsedPlayTime, prefilled: false, flash: 0, hide: false, hideT: 0, stored: 0, burstT: 0 }; }
   function nestSpawnOne(n, t) {
     var a = randomAngle(), d = 18 + Math.random() * 14, x = n.x + Math.cos(a) * d, y = n.y + 18 + Math.abs(Math.sin(a)) * d;
     var beh = pickBeh(t);
@@ -3115,17 +3116,35 @@
     var iv = lerp(NEST_DAY_IV, NEST_NIGHT_IV, dayNow.night);
     for (var i = 0; i < nests.length; i++) {
       var n = nests[i]; if (!n.alive) continue;
+      var dc = distance(n.x, n.y, cat.x, cat.y), hr = (dayNow.night > 0.5 ? NEST_HIDE_R_NIGHT : NEST_HIDE_R) * entityScaleMult;
+      if (dc < hr) { // 猫在窝边：不出鼠，老鼠在窝里攒着（最多 6 只）
+        if (!n.hide) { n.hide = true; n.hideT = 0; }
+        n.hideT += dt; n.t -= dt;
+        if (n.t <= 0) { n.t = iv; if (n.stored < NEST_STORE_MAX && n.owned + n.stored < NEST_OWN_MAX) n.stored++; }
+        continue;
+      }
+      if (n.hide) { n.hide = false; if (n.stored > 0) nestBurst(n, t, cap); }
       if (n.silT > 0) { n.silT -= dt; continue; }
-      if (distance(n.x, n.y, cat.x, cat.y) > R) continue; // 远处的窝休眠（性能）
+      if (dc > R) continue; // 远处的窝休眠（性能）
       if (!n.prefilled) { n.prefilled = true; for (var k = 0; k < 4 && mice.length < cap; k++) nestSpawnOne(n, t); }
       n.t -= dt;
       if (n.t <= 0) { n.t = iv; if (n.owned < NEST_OWN_MAX && mice.length < cap) nestSpawnOne(n, t); }
     }
   }
+  function nestBurst(n, t, cap) { // 猫走开：攒着的老鼠一下子全冲出来
+    var k = n.stored; n.stored = 0; n.burstT = 0.6; n.prefilled = true;
+    for (var i = 0; i < k && mice.length < cap; i++) {
+      var a = Math.PI / 2 + (i - (k - 1) / 2) * 0.6 + (Math.random() - 0.5) * 0.2, beh = pickBeh(t); if (beh === "flock") beh = "wander";
+      var m = spawnMouseAt(n.x + Math.cos(a) * 16, n.y + 14 + Math.abs(Math.sin(a)) * 10, typeForBeh(beh, t), t, beh);
+      m.nest = n; m.home = n; if (beh === "burrow") m.hole = { x: n.x, y: n.y }; n.owned++;
+      var sp = (m.speed || 120) * 1.6; m.vx = Math.cos(a) * sp; m.vy = Math.sin(a) * sp;
+    }
+    if (CA.sfx.nest) CA.sfx.nest("burst");
+  }
   function silenceNests(x, y, r, secs) { for (var i = 0; i < nests.length; i++) if (nests[i].alive && distance(nests[i].x, nests[i].y, x, y) < r) nests[i].silT = Math.max(nests[i].silT, secs); }
   function nestNear(x, y, r) { for (var i = 0; i < nests.length; i++) { var n = nests[i]; if (n.alive && distance(n.x, n.y, x, y) < r) return n; } return null; }
   function destroyNest(n) {
-    n.alive = false; n.deadT = 0; nestStats.destroyed++;
+    n.alive = false; n.deadT = 0; nestStats.destroyed++; n.stored = 0; n.hide = false;
     poops.push({ x: n.x + 26, y: n.y + 16, age: 0 });
     score += NEST_SCORE; spawnScorePopup(n.x, n.y - 30, NEST_SCORE);
     for (var i = 0; i < mice.length; i++) { var m = mice[i]; if (m.nest === n) { m.nest = null; if (distance(m.x, m.y, n.x, n.y) < NEST_ROAM) { startFlee(m, 4); m.home = null; } } }
@@ -3143,7 +3162,8 @@
     for (i = 0; i < nests.length; i++) {
       var n = nests[i];
       if (n.flash > 0) n.flash -= dt;
-      if (!n.alive) { n.deadT += dt; if (n.deadT >= NEST_RESPAWN) { var p = placeNest(600); if (p) { n.x = p.x; n.y = p.y; n.alive = true; n.t = 1; n.owned = 0; n.prefilled = false; n.flash = 2; if (CA.sfx.nest) CA.sfx.nest("respawn"); } else n.deadT = NEST_RESPAWN - 5; } }
+      if (n.burstT > 0) n.burstT -= dt;
+      if (!n.alive) { n.deadT += dt; if (n.deadT >= NEST_RESPAWN) { var p = placeNest(600); if (p) { n.x = p.x; n.y = p.y; n.alive = true; n.t = 1; n.owned = 0; n.stored = 0; n.hide = false; n.prefilled = false; n.flash = 2; if (CA.sfx.nest) CA.sfx.nest("respawn"); } else n.deadT = NEST_RESPAWN - 5; } }
     }
     nestAddT += dt;
     if (nestAddT >= NEST_ADD_EVERY) { nestAddT = 0; if (nests.length < NEST_MAX) { var q = placeNest(600); if (q) { var nn = newNest(q); nn.flash = 2; nests.push(nn); } } }
@@ -3267,6 +3287,15 @@
       if (!n.alive && n.deadT < 0.4) { var k = n.deadT / 0.4; blitSpr(nestSprite(false, u), sx, sy, u * (1 - k * 0.3), 1 - k); }
       blitSpr(nestSprite(!n.alive, u), sx, sy, u, n.alive ? 1 : Math.min(1, n.deadT / 0.4) * 0.9);
       if (n.alive && n.flash > 0) { ctx.strokeStyle = "rgba(255,210,80," + (n.flash / 2) + ")"; ctx.lineWidth = s(4); ctx.beginPath(); ctx.arc(sx, sy, s(60) * (1.4 - n.flash * 0.2), 0, 7); ctx.stroke(); }
+      if (n.alive && n.hide) { // 窝口两只发抖的小眼睛 + 💦
+        var tr = reducedMotion ? 0 : Math.sin(elapsedPlayTime * 40) * s(1.2), ey = sy + s(4), ap = Math.min(1, n.hideT * 3);
+        ctx.globalAlpha = ap;
+        for (var e = -1; e <= 1; e += 2) { ctx.fillStyle = "#fff"; ctx.beginPath(); ctx.ellipse(sx + e * s(7) + tr, ey, s(5), s(6), 0, 0, 7); ctx.fill(); ctx.fillStyle = "#222"; ctx.beginPath(); ctx.arc(sx + e * s(7) + tr - e * s(1), ey + s(1), s(2.6), 0, 7); ctx.fill(); ctx.fillStyle = "#fff"; ctx.fillRect(sx + e * s(7) + tr - e * s(1) - s(1.2), ey - s(0.6), s(1.2), s(1.2)); }
+        emojiQuick("💦", sx + s(20), sy - s(40) + (reducedMotion ? 0 : Math.sin(elapsedPlayTime * 6) * s(2)), s(16));
+        if (n.stored > 0) emojiQuick("×" + n.stored, sx - s(24), sy - s(38), s(12), null, "#fff");
+        ctx.globalAlpha = 1;
+      }
+      if (n.alive && n.burstT > 0 && !reducedMotion) { var bk = 1 - n.burstT / 0.6; ctx.strokeStyle = "rgba(255,240,180," + (1 - bk) + ")"; ctx.lineWidth = s(3); for (var b2 = 0; b2 < 8; b2++) { var ba = b2 / 8 * 6.283, r1 = s(20 + bk * 40), r2 = s(30 + bk * 55); ctx.beginPath(); ctx.moveTo(sx + Math.cos(ba) * r1, sy + Math.sin(ba) * r1); ctx.lineTo(sx + Math.cos(ba) * r2, sy + Math.sin(ba) * r2); ctx.stroke(); } emojiQuick("💨", sx, sy - s(30) - bk * s(20), s(18), 1 - bk); }
       if (n.alive && n.silT > 0) emojiQuick("🔇", sx + s(30), sy - s(50), s(18));
       if (!n.alive && n.deadT < 6 && !reducedMotion) { // 绿色臭气小云
         for (var q = 0; q < 3; q++) { var ph = (n.deadT * 0.8 + q / 3) % 1; ctx.globalAlpha = (1 - ph) * 0.6; ctx.fillStyle = "#9fd27a"; ctx.beginPath(); ctx.arc(sx + s(-14 + q * 14) + Math.sin(ph * 6 + q) * s(5), sy - s(10) - ph * s(40), s(6 + ph * 6), 0, 7); ctx.fill(); }
@@ -3729,7 +3758,7 @@
     get abilityPanelOpen() { return !dom.abilityScreen.classList.contains("hidden"); },
     get score() { return score; },
     get catches() { return catches; },
-    get nests() { return { list: nests.map(function (n) { return { x: n.x, y: n.y, alive: n.alive, owned: n.owned, silT: n.silT }; }), destroyed: nestStats.destroyed, poop: poopSit.t, day: dayNow, cap: mouseCap() }; },
+    get nests() { return { list: nests.map(function (n) { return { x: n.x, y: n.y, alive: n.alive, owned: n.owned, silT: n.silT, hide: n.hide, stored: n.stored }; }), destroyed: nestStats.destroyed, poop: poopSit.t, day: dayNow, cap: mouseCap() }; },
     setElapsed: function (t) { elapsedPlayTime = t; },
     nestHere: function (dx, dy) { var n = newNest({ x: cat.x + (dx || 0), y: cat.y + (dy || 0) }); nests.push(n); return nests.length - 1; },
     clearNests: function () { nests.length = 0; },

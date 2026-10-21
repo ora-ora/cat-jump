@@ -180,6 +180,7 @@
       var t = now(), B = sfxBus;
       if (kind === "strain") tone(B, t, 180 + Math.random() * 40, 0.18, "triangle", 0.06, 150);
       else if (kind === "poop") { duck(8, 0.3); noise(B, t, 0.18, 0.08, 500, "lowpass"); tone(B, t, 260, 0.2, "sine", 0.14, 70); tone(B, t + 0.22, 880, 0.08, "sine", 0.06, 1320); tone(B, t + 0.3, 1320, 0.12, "sine", 0.05); }
+      else if (kind === "burst") { noise(B, t, 0.15, 0.06, 2200, "bandpass"); for (var j = 0; j < 6; j++) tone(B, t + 0.03 + j * 0.035, 1800 + Math.random() * 1400, 0.05, "sine", 0.035, 3000); tone(B, t, 400, 0.12, "triangle", 0.06, 900); }
       else if (kind === "respawn") { for (var i = 0; i < 3; i++) tone(B, t + i * 0.08, 2400 + i * 300, 0.05, "sine", 0.035, 3000); }
     },
     squeak: function (near) { // near: 0..1，越远越轻
