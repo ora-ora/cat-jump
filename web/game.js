@@ -6,7 +6,7 @@
   // =======================================================================
 
   // TODO(站长): 填入 https://<project-ref>.supabase.co
-  var SUPABASE_URL = "https://dzarlikttkosqkcfixbx.supabase.co";
+  var SUPABASE_URL = "https://api.12121313.xyz"; // Cloudflare Worker 代理（只转发游戏用到的 RPC 和排行榜视图）到 dzarlikttkosqkcfixbx.supabase.co
   // TODO(站长): 填入 publishable key (sb_publishable_...)
   var SUPABASE_ANON_KEY = "sb_publishable_TOkle8Wiqr-lTZ8hHOIiUg_19ykO4Co";
 
