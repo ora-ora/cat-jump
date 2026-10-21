@@ -17,6 +17,7 @@
       <div id="scoreText" class="hud-pill" aria-label="得分" aria-live="off">0</div>
       <div id="comboText" class="hidden"></div>
       <div id="rankText" class="hud-pill small">排名：未上榜</div>
+      <div id="dayText" class="hud-pill small day-pill" aria-live="off">☀️ 白天 2:00</div>
       <div id="abilityBadge" class="hud-pill small ability-badge" role="button" tabindex="0" aria-label="查看技能图鉴（暂停）"></div>
     </div>
     <div id="hudRight">
@@ -25,6 +26,8 @@
       <button id="muteBtn" class="icon-btn" aria-label="静音切换">🔊</button>
     </div>
   </div>
+
+  <canvas id="miniMap" class="mini-map hidden" width="96" height="96" role="button" tabindex="0" aria-label="小地图（点击暂停并查看全图）"></canvas>
 
   <div id="evoBanner" class="evo-banner hidden" aria-live="polite"></div>
 
@@ -99,6 +102,16 @@
         <button id="showLeaderboardBtnResult" class="btn-secondary">查看排行榜</button>
       </div>
       <button id="homeBtn" class="btn-secondary">返回首页</button>
+    </div>
+  </div>
+
+  <div id="mapScreen" class="overlay hidden" role="dialog" aria-modal="true" aria-label="全图">
+    <div class="panel map-panel">
+      <h2>🗺️ 全图</h2>
+      <p class="lb-sub">游戏已暂停 · 🟠 小猫 · 🟤 老鼠窝 · ✕ 已摧毁</p>
+      <canvas id="bigMap" class="big-map"></canvas>
+      <p class="hint" id="mapInfo"></p>
+      <button id="mapCloseBtn" class="btn-secondary">关闭并继续</button>
     </div>
   </div>
 

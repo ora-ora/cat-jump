@@ -501,3 +501,10 @@ html, body { background: #a8de8e; }
 button:focus-visible, [role=button]:focus-visible, input:focus-visible { outline: 3px solid #3b82f6; outline-offset: 2px; }
 body.reduce-motion * { animation-duration: .001s !important; transition-duration: .001s !important; }
 #hudRight .lb-hud-btn { width: 40px; padding: 0; border-radius: 50%; }
+
+/* ---- v11 地图 / 昼夜 ---- */
+.day-pill { margin-top: 4px; font-size: 13px; font-weight: 800; }
+.day-pill.night { background: rgba(40, 46, 90, .9) !important; color: #fff3b0 !important; border-color: #8c96ff !important; }
+.mini-map { position: fixed; right: calc(10px + env(safe-area-inset-right)); bottom: calc(10px + env(safe-area-inset-bottom)); width: 96px; height: 96px; border-radius: 14px; border: 3px solid #ffb36b; box-shadow: 0 3px 8px rgba(0,0,0,.18); z-index: 6; cursor: pointer; background: #b8e6a0; }
+.map-panel { text-align: center; }
+.big-map { border-radius: 16px; border: 3px solid #ffb36b; display: block; margin: 8px auto; max-width: 100%; }

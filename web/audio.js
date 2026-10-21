@@ -79,7 +79,7 @@
 
   // ---- 生成式 BGM ----
   function rng(seed) { return function () { seed |= 0; seed = seed + 0x6D2B79F5 | 0; var t = Math.imul(seed ^ seed >>> 15, 1 | seed); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
-  var SCALE = [0, 2, 4, 5, 7, 9, 11];
+  var SCALE_MAJ = [0, 2, 4, 5, 7, 9, 11], SCALE_MIN = [0, 2, 3, 5, 7, 8, 10], SCALE = SCALE_MAJ; // 夜晚换小调
   // 和弦级数（0=I … 5=vi）马尔可夫转移表
   var NEXT = { 0: [3, 4, 5, 1, 3, 4], 1: [4, 4, 3, 6 % 6], 2: [5, 3, 5], 3: [4, 0, 1, 4, 0], 4: [0, 5, 0, 3, 2], 5: [3, 1, 4, 3] };
   var KEYS = [60, 62, 65, 67, 57];
@@ -104,7 +104,7 @@
         this.level = this.want;
         if (this.bar % 4 === 0) { this.phrase++; if (r() < 0.45) this.newMotif(); else this.motif = this.motif.map(function (x) { return x < 0 || r() < 0.7 ? x : x + (r() < 0.5 ? 1 : -1); }); if (this.phrase % 4 === 0 && r() < 0.5) this.key = KEYS[Math.floor(r() * KEYS.length)]; }
         var opts = NEXT[this.deg] || [0]; this.deg = this.bar % 8 === 0 ? 0 : opts[Math.floor(r() * opts.length)];
-        this.tempo = 120 + this.level * 4;
+        SCALE = this.night ? SCALE_MIN : SCALE_MAJ; this.tempo = 120 + this.level * 4 - (this.night ? 10 : 0);
         this.bar++;
       }
       if (!S.master || !S.bgmOn) return;
@@ -175,6 +175,13 @@
       else if (kind === "corner") { tone(B, t, 1800, 0.06, "sine", 0.03, 1400); tone(B, t + 0.07, 1700, 0.06, "sine", 0.025, 1300); }
       else if (kind === "cancel") { tone(B, t, 500, 0.08, "sine", 0.03, 300); }
     },
+    nest: function (kind) {
+      if (!canPlay("nest_" + kind, kind === "poop" ? 4 : 1, kind === "strain" ? 0.3 : 0.2)) return;
+      var t = now(), B = sfxBus;
+      if (kind === "strain") tone(B, t, 180 + Math.random() * 40, 0.18, "triangle", 0.06, 150);
+      else if (kind === "poop") { duck(8, 0.3); noise(B, t, 0.18, 0.08, 500, "lowpass"); tone(B, t, 260, 0.2, "sine", 0.14, 70); tone(B, t + 0.22, 880, 0.08, "sine", 0.06, 1320); tone(B, t + 0.3, 1320, 0.12, "sine", 0.05); }
+      else if (kind === "respawn") { for (var i = 0; i < 3; i++) tone(B, t + i * 0.08, 2400 + i * 300, 0.05, "sine", 0.035, 3000); }
+    },
     squeak: function (near) { // near: 0..1，越远越轻
       if (!ctx) return; var t = now(); while (squeakTimes.length && t - squeakTimes[0] > 1) squeakTimes.shift();
       if (squeakTimes.length >= 4 || !canPlay("squeak", 1, 0.08)) return; squeakTimes.push(t);
@@ -203,6 +210,7 @@
 
   window.CatAudio = {
     unlock: unlock, sfx: sfx, settings: S,
+    setNight: function (v) { bgm.night = !!v; },
     setIntensity: function (n) { bgm.want = Math.max(0, Math.min(3, n | 0)); },
     setMuffle: setMuffle,
     set: function (k, v) {

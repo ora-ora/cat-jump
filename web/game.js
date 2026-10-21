@@ -322,6 +322,7 @@
         if (chunk) list = list.concat(chunk.obstacles);
       }
     }
+    if (nearEdge(x, y, CHUNK_SIZE * 1.5)) list = list.concat(FENCES);
     return list;
   }
 
@@ -369,6 +370,7 @@
     cat.x = 0; cat.y = 0; cat.vx = 0; cat.vy = 0; cat.facing = 0; cat.runCycle = 0; cat.squash = 0; cat.slideSign = 0;
     camera.x = 0; camera.y = 0;
     ensureChunksAround(0, 0);
+    elapsedPlayTime = 0; nestsInit();
   }
 
   // =======================================================================
@@ -381,6 +383,7 @@
     var smoothing = 1 - Math.exp(-dt * 6);
     camera.x += (cat.x - camera.x) * smoothing;
     camera.y += (cat.y - camera.y) * smoothing;
+    clampCamera();
   }
 
   function worldToScreenX(x) { return (x - camera.x) * SCALE + W / 2; }
@@ -677,6 +680,7 @@
   function zoneCount(hw, hh) { var n = 0; for (var i = 0; i < mice.length; i++) { var m = mice[i]; if (Math.abs(m.x - camera.x) < hw && Math.abs(m.y - camera.y) < hh) n++; } return n; }
   var noSpawn = false;
   function trySpawnMouse() {
+    return; // v11：老鼠只从老鼠窝出来（见 nestSpawn）
     if (noSpawn) return;
     var t = currentDifficulty(), target = maxMice(t);
     var hw = W / (2 * SCALE), hh = H / (2 * SCALE);
@@ -893,6 +897,7 @@
 
   function finishStep(m, dt) {
     applyAbilityToMouse(m, dt);
+    homePull(m);
     if (m.cornerT > 0) { m.cornerT -= dt; m.vx *= 0.4; m.vy *= 0.4; }
     m.x += m.vx * dt; m.y += m.vy * dt;
     var obstacles = queryNearbyObstacles(m.x, m.y);
@@ -1253,9 +1258,10 @@
       // 老鼠好奇钻箱
       if (!b.closed || b.mice.length < boxCap(S)) {
         // 性能：只查箱子 225 半径内的网格，不再每帧遍历全部老鼠
-        gridEach(b.x, b.y, 230 * esm, function (m) {
+        b.atNest = !!nestNear(b.x, b.y, 120 * esm);
+        gridEach(b.x, b.y, 230 * esm * (b.atNest ? 1.5 : 1), function (m) {
           if (m.hidden || m.carried || m.under || m.asleep || m.type === "gold" && Math.random() < 0.5 * dt) return;
-          var d = distance(m.x, m.y, b.x, b.y), lureR = (m.beh === "forager" || m.beh === "thief" ? 225 : 150) * esm;
+          var d = distance(m.x, m.y, b.x, b.y), lureR = (m.beh === "forager" || m.beh === "thief" ? 225 : 150) * esm * (b.atNest ? 1.5 : 1);
           if (d < lureR && !(m.stun > 0)) m.lureX = b.x, m.lureY = b.y;
           if (d < 14 * esm && b.mice.length < boxCap(S)) { m.hidden = true; m.boxT = 3; b.mice.push(m); b.shake = 0.4; if (S >= 2) b.closed = true; }
         });
@@ -1513,7 +1519,7 @@
       if (bow.length < 3) return false;
       logAim("spot", bow.length, best.n);
       for (i = 0; i < bow.length; i++) { stunM(bow[i], 2.5, "bow"); if (bow[i].beh === "thief") { bow[i].beh = "forager"; bow[i].food = null; fx("bang", bow[i].x, bow[i].y, 0.4, {}); } }
-      ab.spot = { x: best.x, y: best.y, t: 2.5, r: 100 * esm }; abProc();
+      ab.spot = { x: best.x, y: best.y, t: 2.5, r: 100 * esm }; abProc(); silenceNests(best.x, best.y, 100 * esm, 5);
       return true;
     });
     if (ab.spot) { ab.spot.t -= dt; if (ab.spot.t <= 0) ab.spot = null; }
@@ -1527,7 +1533,7 @@
         pullM(ch[i], cat.x + Math.cos(ang) * 90 * esm, cat.y + Math.sin(ang) * 90 * esm, 260 * esm, 1.2);
         stunM(ch[i], 3, "sing");
       }
-      fx("choir", cat.x, cat.y, 3, {}); abProc();
+      fx("choir", cat.x, cat.y, 3, {}); abProc(); silenceNests(cat.x, cat.y, 320 * esm, 5);
       return true;
     });
   }
@@ -2084,6 +2090,7 @@
 
   function drawCat() {
     var sx = worldToScreenX(cat.x), sy = worldToScreenY(cat.y) + s(evoHop()), stc = uniCatStretch();
+    if (poopSitting() && !reducedMotion) sx += Math.sin(elapsedPlayTime * 50) * s(1.5);
     if (stc) { ctx.save(); ctx.translate(sx, sy); ctx.rotate(stc.a); ctx.scale(stc.s, 1 / Math.sqrt(stc.s)); ctx.rotate(-stc.a); ctx.translate(-sx, -sy); }
     drawCatAt(sx, sy, s(cat.r), catAnim, cat.runCycle, currentSkin);
     if (stc) ctx.restore();
@@ -2167,6 +2174,7 @@
       var ox = 0;
       if (m.cornerT > 0 || m.trem > 0 || (m.beh === "timid" && m.state === "flee" && v.full)) ox = Math.sin(elapsedPlayTime * 60) * 2 * u;
       if (m.asleep) st = ["sit", 2];
+      if (dayNow.night > 0.5 && mouseInDark(m)) { var ea = 0.5 + 0.5 * dayNow.night; ctx.fillStyle = "rgba(255,240,120," + ea + ")"; ctx.fillRect(sx - 5 * u - 2, sy - 8 * u - 2, 4, 4); ctx.fillRect(sx + 5 * u - 2, sy - 8 * u - 2, 4, 4); continue; }
       if (!dbgDraw.noSprite) blit(ANIM.mouseSprite(m.type, d[0], st[0], st[1], spritePx(u)), sx + ox, sy, u, d[1]);
       if (!dbgDraw.noTell && (v.full || m.type === "gold" || m.packId)) drawTell(m, sx + ox, sy, u, st, v.full, v.i);
     }
@@ -2335,6 +2343,7 @@
       p_elapsed_seconds: elapsedPlayTime,
       p_ability_procs: ab ? ab.procs : 0,
       p_uni_procs: uni ? uni.stats : null,
+      p_nests_destroyed: nestStats.destroyed,
       p_client_ts: new Date().toISOString()
     };
   }
@@ -2768,7 +2777,7 @@
 
   function enterStart() {
     state = STATE_START;
-    hideScreen(dom.hud);
+    hideScreen(dom.hud); var mm2 = document.getElementById("miniMap"); if (mm2) mm2.classList.add("hidden");
     hideScreen(dom.pauseScreen);
     hideScreen(dom.resultScreen);
     hideScreen(dom.confirmEndScreen);
@@ -2783,7 +2792,7 @@
     var nickname = enforceNicknameNotOffensive(dom.nicknameInput, dom.nicknameHint).trim();
     storageSet("catmouse_nickname", nickname);
     hideScreen(dom.startScreen);
-    showScreen(dom.hud);
+    showScreen(dom.hud); var mm = document.getElementById("miniMap"); if (mm) mm.classList.remove("hidden");
     resetWorld();
     resetScoring();
     resetAbilities();
@@ -2829,7 +2838,7 @@
 
   function enterResult() {
     state = STATE_RESULT;
-    hideScreen(dom.hud);
+    hideScreen(dom.hud); var mm2 = document.getElementById("miniMap"); if (mm2) mm2.classList.add("hidden");
     if (score > best) { best = score; storageSet("catmouse_best", String(best)); }
     dom.resultScore.textContent = String(score);
     dom.resultCatches.textContent = String(catches);
@@ -2940,6 +2949,13 @@
     dom.abilityBadge.addEventListener(ev, function (e) { e.stopPropagation(); }, { passive: true });
   });
   dom.abilityCloseBtn.addEventListener("click", function () { closeAbilityPanel(); });
+  (function () {
+    var mm = document.getElementById("miniMap"); if (!mm) return;
+    ["pointerdown", "touchstart", "mousedown"].forEach(function (ev) { mm.addEventListener(ev, function (e) { e.stopPropagation(); }, { passive: true }); });
+    mm.addEventListener("click", function (e) { e.stopPropagation(); openMap(); });
+    mm.addEventListener("keydown", function (e) { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openMap(); } });
+    document.getElementById("mapCloseBtn").addEventListener("click", closeMap);
+  })();
   // 音频设置（暂停面板）：音乐/音效分开开关 + 音量，存 localStorage
   (function () {
     var S = CA.settings, q = function (id) { return document.getElementById(id); };
@@ -2965,7 +2981,7 @@
   // ---- 首局新手引导（只出现一次）：开始第一局前 3 步说明 ----
   var ONBOARD_STEPS = [
     ["👆", "按住屏幕边缘，小猫就朝那个方向跑", "手指在哪边，小猫往哪边跑；松手就停下。也可以在暂停面板开启「虚拟摇杆」。桌面端用方向键 / WASD。"],
-    ["🐾", "靠近老鼠会自动飞扑", "老鼠进入身前扇形会自动扑上去吃掉；直线追会加速冲刺。点别的方向立即取消，不会抢你的操作。"],
+    ["🐾", "靠近老鼠会自动飞扑", "老鼠只从老鼠窝 🕳️ 里出来（屏幕边缘箭头指路，夜晚出得更多）。靠近老鼠会自动飞扑；蹲在窝上不动 3 秒会便便 💩，把窝摧毁！"],
     ["⭐", "点左上角 Lv 徽章看技能", "每只猫有专属招牌技能，抓 15/40/80/150 只进化。点徽章会暂停并显示全部技能说明。"]
   ];
   function maybeOnboard(next) {
@@ -3040,6 +3056,305 @@
   }
 
   // =======================================================================
+  // 地图 / 老鼠窝 / 昼夜 / 蹲窝便便（MAP_NEST.md，数值为初始值，未经平衡）
+  // =======================================================================
+  var MAP_HALF = 1500, FENCE_T = 80;
+  var NEST_START = 8, NEST_MAX = 10, NEST_MIN_SPAWN_D = 500, NEST_SPACING = 450, NEST_EDGE = 150, NEST_RESPAWN = 45, NEST_ADD_EVERY = 90;
+  var NEST_DAY_IV = 2.5, NEST_NIGHT_IV = 1.4, NEST_OWN_MAX = 12, NEST_ROAM = 350, NIGHT_CAP = 240;
+  var DAY_T = 120, DUSK_T = 8, NIGHT_T = 60, DAWN_T = 8, CYCLE_T = DAY_T + DUSK_T + NIGHT_T + DAWN_T;
+  var POOP_T = 3, POOP_R = 40, POOP_MIN_RUN = 20, NEST_SCORE = 30;
+  var FENCES = [
+    { x: -MAP_HALF - FENCE_T, y: -MAP_HALF - FENCE_T, w: 2 * MAP_HALF + 2 * FENCE_T, h: FENCE_T, kind: "fence" },
+    { x: -MAP_HALF - FENCE_T, y: MAP_HALF, w: 2 * MAP_HALF + 2 * FENCE_T, h: FENCE_T, kind: "fence" },
+    { x: -MAP_HALF - FENCE_T, y: -MAP_HALF, w: FENCE_T, h: 2 * MAP_HALF, kind: "fence" },
+    { x: MAP_HALF, y: -MAP_HALF, w: FENCE_T, h: 2 * MAP_HALF, kind: "fence" }
+  ];
+  var nests = [], poops = [], nestStats = { destroyed: 0 }, poopSit = { t: 0, nest: null }, nestAddT = 0, ownRecount = 0;
+  function nearEdge(x, y, m) { return x < -MAP_HALF + m || x > MAP_HALF - m || y < -MAP_HALF + m || y > MAP_HALF - m; }
+  // 昼夜：返回 { night: 0..1, phase: "day"|"dusk"|"night"|"dawn", left: 秒 }
+  function dayInfo() {
+    var t = elapsedPlayTime % CYCLE_T;
+    if (t < DAY_T) return { night: 0, phase: "day", left: DAY_T - t };
+    t -= DAY_T; if (t < DUSK_T) return { night: t / DUSK_T, phase: "dusk", left: DUSK_T - t + NIGHT_T };
+    t -= DUSK_T; if (t < NIGHT_T) return { night: 1, phase: "night", left: NIGHT_T - t };
+    t -= NIGHT_T; return { night: 1 - t / DAWN_T, phase: "dawn", left: DAWN_T - t + DAY_T };
+  }
+  var dayNow = { night: 0, phase: "day", left: DAY_T };
+  function nestSpotOk(x, y, spacing, minCat) {
+    if (nearEdge(x, y, NEST_EDGE)) return false;
+    if (Math.sqrt(x * x + y * y) < NEST_MIN_SPAWN_D) return false;
+    if (minCat && distance(x, y, cat.x, cat.y) < minCat) return false;
+    for (var i = 0; i < nests.length; i++) if (nests[i].alive && distance(x, y, nests[i].x, nests[i].y) < spacing) return false;
+    var c = worldToChunk(x, y); for (var dy = -1; dy <= 1; dy++) for (var dx = -1; dx <= 1; dx++) getChunk(c.cx + dx, c.cy + dy);
+    return !inObstacle(x, y, 40 + 30);
+  }
+  function placeNest(minCat) {
+    var spacing = NEST_SPACING;
+    for (var tries = 0; tries < 400; tries++) {
+      if (tries === 200) spacing = 350;
+      var x = (Math.random() * 2 - 1) * (MAP_HALF - NEST_EDGE), y = (Math.random() * 2 - 1) * (MAP_HALF - NEST_EDGE);
+      if (nestSpotOk(x, y, spacing, minCat)) return { x: x, y: y };
+    }
+    return null;
+  }
+  function nestsInit() {
+    nests.length = 0; poops.length = 0; nestStats.destroyed = 0; poopSit.t = 0; poopSit.nest = null; nestAddT = 0;
+    for (var i = 0; i < NEST_START; i++) { var p = placeNest(0); if (p) nests.push(newNest(p)); }
+  }
+  function newNest(p) { return { x: p.x, y: p.y, alive: true, t: Math.random() * 1.5, owned: 0, silT: 0, deadT: 0, born: elapsedPlayTime, prefilled: false, flash: 0 }; }
+  function nestSpawnOne(n, t) {
+    var a = randomAngle(), d = 18 + Math.random() * 14, x = n.x + Math.cos(a) * d, y = n.y + 18 + Math.abs(Math.sin(a)) * d;
+    var beh = pickBeh(t);
+    if (beh === "flock") { var k = 4 + Math.floor(Math.random() * 5); spawnPack({ x: x, y: y }, k, t); for (var j = mice.length - k; j < mice.length; j++) if (mice[j]) { mice[j].nest = n; mice[j].home = n; } n.owned += k; return; }
+    var m = spawnMouseAt(x, y, typeForBeh(beh, t), t, beh); m.nest = n; m.home = n; if (beh === "burrow") m.hole = { x: n.x, y: n.y }; n.owned++;
+  }
+  function mouseCap() { return dayNow.night > 0 && resScale > 0.6 ? Math.round(lerp(180, NIGHT_CAP, dayNow.night)) : 180; }
+  function nestSpawn(dt) {
+    if (noSpawn) return;
+    var t = currentDifficulty(), R = viewRadiusWorld() + 300, cap = mouseCap();
+    var iv = lerp(NEST_DAY_IV, NEST_NIGHT_IV, dayNow.night);
+    for (var i = 0; i < nests.length; i++) {
+      var n = nests[i]; if (!n.alive) continue;
+      if (n.silT > 0) { n.silT -= dt; continue; }
+      if (distance(n.x, n.y, cat.x, cat.y) > R) continue; // 远处的窝休眠（性能）
+      if (!n.prefilled) { n.prefilled = true; for (var k = 0; k < 4 && mice.length < cap; k++) nestSpawnOne(n, t); }
+      n.t -= dt;
+      if (n.t <= 0) { n.t = iv; if (n.owned < NEST_OWN_MAX && mice.length < cap) nestSpawnOne(n, t); }
+    }
+  }
+  function silenceNests(x, y, r, secs) { for (var i = 0; i < nests.length; i++) if (nests[i].alive && distance(nests[i].x, nests[i].y, x, y) < r) nests[i].silT = Math.max(nests[i].silT, secs); }
+  function nestNear(x, y, r) { for (var i = 0; i < nests.length; i++) { var n = nests[i]; if (n.alive && distance(n.x, n.y, x, y) < r) return n; } return null; }
+  function destroyNest(n) {
+    n.alive = false; n.deadT = 0; nestStats.destroyed++;
+    poops.push({ x: n.x + 26, y: n.y + 16, age: 0 });
+    score += NEST_SCORE; spawnScorePopup(n.x, n.y - 30, NEST_SCORE);
+    for (var i = 0; i < mice.length; i++) { var m = mice[i]; if (m.nest === n) { m.nest = null; if (distance(m.x, m.y, n.x, n.y) < NEST_ROAM) { startFlee(m, 4); m.home = null; } } }
+    if (CA.sfx.nest) CA.sfx.nest("poop"); feedback("wave");
+    maybeSendHeartbeat(Date.now());
+  }
+  function nestUpdate(dt) {
+    dayNow = dayInfo();
+    if (CA.setNight) CA.setNight(dayNow.night > 0.5);
+    nestSpawn(dt);
+    // 每 0.5s 重新统计每个窝在外面的老鼠数（被吃/回收/装箱都会自动扣掉）
+    ownRecount -= dt;
+    if (ownRecount <= 0) { ownRecount = 0.5; for (var i = 0; i < nests.length; i++) nests[i].owned = 0; for (i = 0; i < mice.length; i++) if (mice[i].nest) mice[i].nest.owned++; }
+    // 重生 + 补到上限
+    for (i = 0; i < nests.length; i++) {
+      var n = nests[i];
+      if (n.flash > 0) n.flash -= dt;
+      if (!n.alive) { n.deadT += dt; if (n.deadT >= NEST_RESPAWN) { var p = placeNest(600); if (p) { n.x = p.x; n.y = p.y; n.alive = true; n.t = 1; n.owned = 0; n.prefilled = false; n.flash = 2; if (CA.sfx.nest) CA.sfx.nest("respawn"); } else n.deadT = NEST_RESPAWN - 5; } }
+    }
+    nestAddT += dt;
+    if (nestAddT >= NEST_ADD_EVERY) { nestAddT = 0; if (nests.length < NEST_MAX) { var q = placeNest(600); if (q) { var nn = newNest(q); nn.flash = 2; nests.push(nn); } } }
+    for (i = poops.length - 1; i >= 0; i--) { poops[i].age += dt; if (poops[i].age > 10) poops.splice(i, 1); }
+    // 蹲窝便便：在窝中心 40 内、没有方向输入、开局 20s 后，静止 3s
+    var on = nestNear(cat.x, cat.y, POOP_R), still = moveDir.x === 0 && moveDir.y === 0 && !(uni && uni.lunge);
+    if (on && still && elapsedPlayTime >= POOP_MIN_RUN) {
+      if (poopSit.nest !== on) { poopSit.nest = on; poopSit.t = 0; }
+      var before = poopSit.t; poopSit.t += dt;
+      if (Math.floor(before * 2) !== Math.floor(poopSit.t * 2) && CA.sfx.nest) CA.sfx.nest("strain");
+      cat.x += (on.x - cat.x) * Math.min(1, dt * 8); cat.y += (on.y - 16 - cat.y) * Math.min(1, dt * 8); // 吸到窝顶（坐在土丘上）
+      if (poopSit.t >= POOP_T) { destroyNest(on); poopSit.t = 0; poopSit.nest = null; }
+    } else { poopSit.t = 0; poopSit.nest = null; }
+  }
+  function poopSitting() { return poopSit.nest && poopSit.t > 0; }
+  // 老鼠在窝附近 350 内游荡
+  function homePull(m) {
+    var h = m.home; if (!h || m.state !== "wander" || m.asleep || m.packId) return;
+    if (!h.alive) { m.home = null; return; }
+    var dx = h.x - m.x, dy = h.y - m.y, d = Math.sqrt(dx * dx + dy * dy);
+    if (d > NEST_ROAM * entityScaleMult) { var sp = Math.sqrt(m.vx * m.vx + m.vy * m.vy) || m.speed * 0.5; m.vx = dx / d * sp; m.vy = dy / d * sp; }
+  }
+  function clampCamera() {
+    var hw = W / (2 * SCALE), hh = H / (2 * SCALE);
+    var lx = MAP_HALF + FENCE_T * 0.5 - hw, ly = MAP_HALF + FENCE_T * 0.5 - hh;
+    camera.x = lx > 0 ? clamp(camera.x, -lx, lx) : 0; camera.y = ly > 0 ? clamp(camera.y, -ly, ly) : 0;
+  }
+
+  // ---- 美术：Q 版老鼠窝 / 便便 / 篱笆（离屏缓存） ----
+  var nestSprCache = {};
+  function nestSprite(dead, px) {
+    var key = (dead ? "d" : "a") + "|" + Math.round(px * 10) + "|" + DPR;
+    if (nestSprCache[key]) return nestSprCache[key];
+    var sc = px * DPR, c = document.createElement("canvas"); c.width = Math.ceil(120 * sc); c.height = Math.ceil(100 * sc);
+    var g = c.getContext("2d"); g.scale(sc, sc); g.translate(60, 62); g.lineJoin = "round"; g.lineCap = "round";
+    // 投影
+    g.fillStyle = "rgba(40,90,30,.22)"; g.beginPath(); g.ellipse(0, 22, 54, 13, 0, 0, 7); g.fill();
+    if (!dead) {
+      // 土丘（圆润，带高光）
+      var gr = g.createLinearGradient(0, -40, 0, 22); gr.addColorStop(0, "#e2a66a"); gr.addColorStop(1, "#b97842");
+      g.fillStyle = gr; g.strokeStyle = "#7d4c26"; g.lineWidth = 3.5;
+      g.beginPath(); g.moveTo(-50, 18); g.bezierCurveTo(-52, -20, -26, -42, 0, -42); g.bezierCurveTo(26, -42, 52, -20, 50, 18); g.quadraticCurveTo(0, 28, -50, 18); g.closePath(); g.fill(); g.stroke();
+      g.fillStyle = "rgba(255,240,210,.45)"; g.beginPath(); g.ellipse(-18, -26, 14, 6, -0.5, 0, 7); g.fill();
+      // 草叶
+      g.strokeStyle = "#5fae4a"; g.lineWidth = 3;
+      [[-34, -22, -40, -34], [-30, -24, -27, -38], [22, -34, 18, -48], [26, -33, 32, -46], [40, -10, 50, -18]].forEach(function (l) { g.beginPath(); g.moveTo(l[0], l[1]); g.quadraticCurveTo(l[0] + (l[2] - l[0]) * 0.3, l[3] + 6, l[2], l[3]); g.stroke(); });
+      // 小石子
+      g.fillStyle = "#cdbca6"; g.beginPath(); g.ellipse(32, 8, 5, 3.5, 0, 0, 7); g.ellipse(-36, 6, 4, 3, 0, 0, 7); g.fill();
+      // 拱形门洞 + 木门框
+      g.fillStyle = "#3b2416"; g.beginPath(); g.moveTo(-17, 16); g.lineTo(-17, -2); g.arc(0, -2, 17, Math.PI, 0); g.lineTo(17, 16); g.quadraticCurveTo(0, 20, -17, 16); g.fill();
+      g.strokeStyle = "#a0683a"; g.lineWidth = 4; g.beginPath(); g.moveTo(-19, 16); g.lineTo(-19, -2); g.arc(0, -2, 19, Math.PI, 0); g.lineTo(19, 16); g.stroke();
+      // 门里一对发亮小眼睛
+      g.fillStyle = "#fff"; g.beginPath(); g.arc(-6, 2, 2.6, 0, 7); g.arc(6, 2, 2.6, 0, 7); g.fill();
+      g.fillStyle = "#ffb3c6"; g.beginPath(); g.ellipse(0, 8, 2.4, 1.6, 0, 0, 7); g.fill();
+      // 奶酪小旗
+      g.strokeStyle = "#7d4c26"; g.lineWidth = 2.5; g.beginPath(); g.moveTo(30, -26); g.lineTo(30, -58); g.stroke();
+      g.fillStyle = "#ffd23f"; g.strokeStyle = "#d39a1c"; g.lineWidth = 1.8; g.beginPath(); g.moveTo(31, -58); g.lineTo(52, -50); g.lineTo(31, -42); g.closePath(); g.fill(); g.stroke();
+      g.fillStyle = "#e9b52a"; g.beginPath(); g.arc(38, -51, 2, 0, 7); g.arc(43, -48, 1.4, 0, 7); g.fill();
+    } else {
+      // 塌掉的窝：扁平灰土堆 + 裂纹 + 倒下的旗
+      g.fillStyle = "#b6a58e"; g.strokeStyle = "#7c6c58"; g.lineWidth = 3;
+      g.beginPath(); g.moveTo(-52, 18); g.bezierCurveTo(-46, -6, -20, -14, 0, -12); g.bezierCurveTo(22, -14, 48, -6, 52, 18); g.quadraticCurveTo(0, 26, -52, 18); g.closePath(); g.fill(); g.stroke();
+      g.strokeStyle = "#7c6c58"; g.lineWidth = 2.2; g.beginPath(); g.moveTo(-20, -6); g.lineTo(-12, 2); g.lineTo(-18, 10); g.moveTo(10, -9); g.lineTo(16, 0); g.lineTo(12, 8); g.stroke();
+      g.fillStyle = "#3b2416"; g.beginPath(); g.ellipse(0, 12, 10, 3.5, 0, 0, 7); g.fill();
+      g.strokeStyle = "#7d4c26"; g.lineWidth = 2.5; g.beginPath(); g.moveTo(30, 14); g.lineTo(52, 4); g.stroke();
+      g.fillStyle = "#e6c35a"; g.beginPath(); g.moveTo(52, 4); g.lineTo(60, 18); g.lineTo(46, 14); g.closePath(); g.fill();
+    }
+    c._w = 120; c._h = 100; c._ox = 60; c._oy = 62;
+    return (nestSprCache[key] = c);
+  }
+  var poopSprCache = {};
+  function poopSprite(px) {
+    var key = Math.round(px * 10) + "|" + DPR; if (poopSprCache[key]) return poopSprCache[key];
+    var sc = px * DPR, c = document.createElement("canvas"); c.width = Math.ceil(64 * sc); c.height = Math.ceil(64 * sc);
+    var g = c.getContext("2d"); g.scale(sc, sc); g.translate(32, 50); g.lineJoin = "round";
+    g.fillStyle = "rgba(60,40,20,.2)"; g.beginPath(); g.ellipse(0, 6, 26, 6, 0, 0, 7); g.fill();
+    var tiers = [[0, 0, 26, 11, "#8b5a2b"], [0, -13, 20, 9.5, "#9b6633"], [0, -25, 13, 8, "#ad7440"]];
+    tiers.forEach(function (e) { g.fillStyle = e[4]; g.strokeStyle = "#5a3818"; g.lineWidth = 2.4; g.beginPath(); g.ellipse(e[0], e[1], e[2], e[3], 0, 0, 7); g.fill(); g.stroke(); g.fillStyle = "rgba(255,230,200,.35)"; g.beginPath(); g.ellipse(e[0] - e[2] * 0.4, e[1] - e[3] * 0.35, e[2] * 0.3, e[3] * 0.28, -0.3, 0, 7); g.fill(); });
+    g.fillStyle = "#ad7440"; g.strokeStyle = "#5a3818"; g.lineWidth = 2.2; g.beginPath(); g.moveTo(-4, -31); g.quadraticCurveTo(0, -46, 9, -40); g.quadraticCurveTo(5, -34, -4, -31); g.fill(); g.stroke();
+    g.fillStyle = "#2a190c"; g.beginPath(); g.arc(-7, -3, 2.8, 0, 7); g.arc(7, -3, 2.8, 0, 7); g.fill();
+    g.fillStyle = "#fff"; g.beginPath(); g.arc(-6, -4, 1.1, 0, 7); g.arc(8, -4, 1.1, 0, 7); g.fill();
+    g.strokeStyle = "#2a190c"; g.lineWidth = 1.8; g.beginPath(); g.arc(0, 1, 3.6, 0.15, Math.PI - 0.15); g.stroke();
+    g.fillStyle = "rgba(255,120,150,.6)"; g.beginPath(); g.ellipse(-13, 2, 3.6, 2.2, 0, 0, 7); g.ellipse(13, 2, 3.6, 2.2, 0, 0, 7); g.fill();
+    c._w = 64; c._h = 64; c._ox = 32; c._oy = 50;
+    return (poopSprCache[key] = c);
+  }
+  function blitSpr(c, sx, sy, scale, alpha) {
+    if (alpha != null) ctx.globalAlpha = alpha;
+    ctx.drawImage(c, sx - c._ox * scale, sy - c._oy * scale, c._w * scale, c._h * scale);
+    if (alpha != null) ctx.globalAlpha = 1;
+  }
+  function drawFences() {
+    var hw = W / (2 * SCALE) + 60, hh = H / (2 * SCALE) + 60;
+    if (!nearEdge(camera.x, camera.y, Math.max(hw, hh) + 80)) return;
+    // 地图外：深一点的草地
+    ctx.fillStyle = "rgba(60,110,50,.45)";
+    var L = worldToScreenX(-MAP_HALF), R = worldToScreenX(MAP_HALF), T = worldToScreenY(-MAP_HALF), B = worldToScreenY(MAP_HALF);
+    if (L > 0) ctx.fillRect(0, 0, L, H); if (R < W) ctx.fillRect(R, 0, W - R, H); if (T > 0) ctx.fillRect(Math.max(0, L), 0, Math.min(W, R) - Math.max(0, L), T); if (B < H) ctx.fillRect(Math.max(0, L), B, Math.min(W, R) - Math.max(0, L), H - B);
+    // 木篱笆：每 40 一根桩 + 两道横栏
+    var step = 40, x0 = Math.max(-MAP_HALF, Math.floor((camera.x - hw) / step) * step), x1 = Math.min(MAP_HALF, camera.x + hw);
+    var y0 = Math.max(-MAP_HALF, Math.floor((camera.y - hh) / step) * step), y1 = Math.min(MAP_HALF, camera.y + hh);
+    function post(wx, wy) { var sx = worldToScreenX(wx), sy = worldToScreenY(wy), w = s(10), h = s(34); ctx.fillStyle = "#c98a55"; ctx.strokeStyle = "#7d4c26"; ctx.lineWidth = Math.max(1.5, s(2.5)); ctx.beginPath(); ctx.moveTo(sx - w / 2, sy); ctx.lineTo(sx - w / 2, sy - h + w / 2); ctx.lineTo(sx, sy - h); ctx.lineTo(sx + w / 2, sy - h + w / 2); ctx.lineTo(sx + w / 2, sy); ctx.closePath(); ctx.fill(); ctx.stroke(); }
+    function rail(ax, ay, bx, by) { ctx.strokeStyle = "#7d4c26"; ctx.lineWidth = s(7); ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(bx, by); ctx.stroke(); ctx.strokeStyle = "#e0a86f"; ctx.lineWidth = s(4); ctx.stroke(); }
+    var e, wx, wy;
+    [[-MAP_HALF, "h"], [MAP_HALF, "h"]].forEach(function (f) {
+      e = f[0]; if (Math.abs(e - camera.y) > hh + 40) return;
+      var sy = worldToScreenY(e); rail(worldToScreenX(x0), sy - s(12), worldToScreenX(x1), sy - s(12)); rail(worldToScreenX(x0), sy - s(24), worldToScreenX(x1), sy - s(24));
+      for (wx = x0; wx <= x1; wx += step) post(wx, e);
+    });
+    [[-MAP_HALF, "v"], [MAP_HALF, "v"]].forEach(function (f) {
+      e = f[0]; if (Math.abs(e - camera.x) > hw + 40) return;
+      var sx = worldToScreenX(e); rail(sx - s(3), worldToScreenY(y0) - s(18), sx - s(3), worldToScreenY(y1) - s(18));
+      for (wy = y0; wy <= y1; wy += step) post(e, wy);
+    });
+  }
+  function drawNestsGround() {
+    var u = s(1) * entityScaleMult * 0.8, i;
+    for (i = 0; i < nests.length; i++) {
+      var n = nests[i], sx = worldToScreenX(n.x), sy = worldToScreenY(n.y);
+      if (sx < -80 || sx > W + 80 || sy < -90 || sy > H + 80) continue;
+      if (!n.alive && n.deadT < 0.4) { var k = n.deadT / 0.4; blitSpr(nestSprite(false, u), sx, sy, u * (1 - k * 0.3), 1 - k); }
+      blitSpr(nestSprite(!n.alive, u), sx, sy, u, n.alive ? 1 : Math.min(1, n.deadT / 0.4) * 0.9);
+      if (n.alive && n.flash > 0) { ctx.strokeStyle = "rgba(255,210,80," + (n.flash / 2) + ")"; ctx.lineWidth = s(4); ctx.beginPath(); ctx.arc(sx, sy, s(60) * (1.4 - n.flash * 0.2), 0, 7); ctx.stroke(); }
+      if (n.alive && n.silT > 0) emojiQuick("🔇", sx + s(30), sy - s(50), s(18));
+      if (!n.alive && n.deadT < 6 && !reducedMotion) { // 绿色臭气小云
+        for (var q = 0; q < 3; q++) { var ph = (n.deadT * 0.8 + q / 3) % 1; ctx.globalAlpha = (1 - ph) * 0.6; ctx.fillStyle = "#9fd27a"; ctx.beginPath(); ctx.arc(sx + s(-14 + q * 14) + Math.sin(ph * 6 + q) * s(5), sy - s(10) - ph * s(40), s(6 + ph * 6), 0, 7); ctx.fill(); }
+        ctx.globalAlpha = 1;
+      }
+    }
+    for (i = 0; i < poops.length; i++) {
+      var p = poops[i], px = worldToScreenX(p.x), py = worldToScreenY(p.y);
+      if (px < -40 || px > W + 40 || py < -60 || py > H + 40) continue;
+      var pop = p.age < 0.25 ? 0.5 + p.age * 2.4 + Math.sin(p.age / 0.25 * Math.PI) * 0.25 : 1;
+      blitSpr(poopSprite(u), px, py, u * 1.1 * pop, p.age > 9 ? 10 - p.age : 1);
+      if (p.age < 3 && !reducedMotion) emojiQuick("✨", px + s(18), py - s(40) - p.age * s(6), s(14), 1 - p.age / 3);
+    }
+  }
+  // 蹲窝进度环（画在猫头顶）
+  function drawPoopRing() {
+    if (!poopSitting()) return;
+    var sx = worldToScreenX(cat.x), sy = worldToScreenY(cat.y) - s(8), r = s(44), p = Math.min(1, poopSit.t / POOP_T);
+    ctx.lineCap = "round"; ctx.lineWidth = s(6); ctx.strokeStyle = "rgba(255,255,255,.75)"; ctx.beginPath(); ctx.arc(sx, sy, r, 0, 7); ctx.stroke();
+    ctx.strokeStyle = "#ff9d4d"; ctx.beginPath(); ctx.arc(sx, sy, r, -Math.PI / 2, -Math.PI / 2 + p * Math.PI * 2); ctx.stroke(); ctx.lineCap = "butt";
+    emojiQuick("嗯~ " + (Math.min(POOP_T, poopSit.t)).toFixed(1) + "s", sx, sy - r - s(14), s(13), null, "#fff");
+    if (!reducedMotion) emojiQuick("💦", sx + s(26), sy - s(26) + Math.sin(poopSit.t * 8) * s(2), s(16));
+  }
+  // 夜晚：整体压暗 + 猫身边暖光圈 + 星星；黄昏/黎明偏橙
+  var STARS = []; for (var si = 0; si < 40; si++) STARS.push([Math.random(), Math.random() * 0.45, 0.4 + Math.random() * 0.6]);
+  function drawNight() {
+    var k = dayNow.night; if (k <= 0.001) return;
+    var sx = worldToScreenX(cat.x), sy = worldToScreenY(cat.y), r1 = s(190 * entityScaleMult), r0 = s(60 * entityScaleMult);
+    if (dayNow.phase === "dusk" || dayNow.phase === "dawn") { ctx.fillStyle = "rgba(255,140,60," + (0.18 * Math.sin(k * Math.PI)) + ")"; ctx.fillRect(0, 0, W, H); }
+    var g = ctx.createRadialGradient(sx, sy, r0, sx, sy, r1);
+    g.addColorStop(0, "rgba(10,15,50,0)"); g.addColorStop(1, "rgba(10,15,50," + (0.62 * k) + ")");
+    ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = "rgba(255,250,215," + (0.12 * k) + ")"; ctx.beginPath(); ctx.arc(sx, sy, r0 * 1.4, 0, 7); ctx.fill();
+    if (k > 0.5) for (var i = 0; i < STARS.length; i++) { var st = STARS[i], tw = reducedMotion ? 1 : 0.6 + 0.4 * Math.sin(elapsedPlayTime * 2 + i); ctx.fillStyle = "rgba(255,255,220," + (st[2] * tw * (k - 0.5) * 2) + ")"; ctx.fillRect(st[0] * W, 60 + st[1] * H, 2, 2); }
+  }
+  function mouseInDark(m) { return dayNow.night > 0.5 && distance(m.x, m.y, cat.x, cat.y) > 200 * entityScaleMult; }
+  // 屏幕外最近 3 个窝：边缘箭头
+  function drawNestArrows() {
+    var list = [], hw = W / 2, hh = H / 2, i;
+    for (i = 0; i < nests.length; i++) {
+      var n = nests[i]; if (!n.alive) continue;
+      var sx = worldToScreenX(n.x), sy = worldToScreenY(n.y);
+      if (sx > 0 && sx < W && sy > 0 && sy < H) continue;
+      list.push({ n: n, d: distance(n.x, n.y, cat.x, cat.y), sx: sx, sy: sy });
+    }
+    list.sort(function (a, b) { return a.d - b.d; });
+    for (i = 0; i < Math.min(3, list.length); i++) {
+      var L = list[i], dx = L.sx - hw, dy = L.sy - hh, a = Math.atan2(dy, dx);
+      var m = 26, kx = (hw - m) / Math.abs(Math.cos(a) || 1e-6), ky = (hh - m - 40) / Math.abs(Math.sin(a) || 1e-6), kk = Math.min(kx, ky);
+      var ax = hw + Math.cos(a) * kk, ay = hh + Math.sin(a) * kk, al = clamp(1.2 - L.d / 2000, 0.35, 1);
+      ctx.save(); ctx.globalAlpha = al; ctx.translate(ax, ay); ctx.rotate(a);
+      ctx.fillStyle = L.n.flash > 0 ? "#ffd23f" : "#c98a55"; ctx.strokeStyle = "#fff"; ctx.lineWidth = 3; ctx.beginPath(); ctx.moveTo(14, 0); ctx.lineTo(-9, -11); ctx.lineTo(-4, 0); ctx.lineTo(-9, 11); ctx.closePath(); ctx.stroke(); ctx.fill();
+      ctx.restore();
+      emojiQuick("🕳️", ax - Math.cos(a) * 24, ay - Math.sin(a) * 24, 16, al);
+    }
+  }
+  // ---- 小地图 ----
+  var miniT = 0;
+  function drawMiniTo(c, size) {
+    var g = c.getContext("2d"), d = Math.min(2, window.devicePixelRatio || 1); if (c.width !== size * d) { c.width = size * d; c.height = size * d; }
+    g.setTransform(d, 0, 0, d, 0, 0); g.clearRect(0, 0, size, size);
+    var k = size / (2 * MAP_HALF), X = function (x) { return (x + MAP_HALF) * k; };
+    g.fillStyle = "#b8e6a0"; g.fillRect(0, 0, size, size);
+    if (dayNow.night > 0) { g.fillStyle = "rgba(10,15,50," + (0.4 * dayNow.night) + ")"; g.fillRect(0, 0, size, size); }
+    for (var i = 0; i < nests.length; i++) { var n = nests[i]; if (n.alive) { g.fillStyle = n.flash > 0 ? "#ffd23f" : "#a0683a"; g.beginPath(); g.arc(X(n.x), X(n.y), Math.max(3, size / 30), 0, 7); g.fill(); } else { g.strokeStyle = "#8a8a8a"; g.lineWidth = 1.5; var q = size / 40; g.beginPath(); g.moveTo(X(n.x) - q, X(n.y) - q); g.lineTo(X(n.x) + q, X(n.y) + q); g.moveTo(X(n.x) + q, X(n.y) - q); g.lineTo(X(n.x) - q, X(n.y) + q); g.stroke(); } }
+    var hw = W / (2 * SCALE), hh = H / (2 * SCALE); g.strokeStyle = "rgba(122,74,42,.6)"; g.lineWidth = 1.2; g.strokeRect(X(camera.x - hw), X(camera.y - hh), 2 * hw * k, 2 * hh * k);
+    g.fillStyle = "#ff8a3d"; g.strokeStyle = "#fff"; g.lineWidth = 1.5; g.beginPath(); g.arc(X(cat.x), X(cat.y), Math.max(3.5, size / 26), 0, 7); g.fill(); g.stroke();
+  }
+  function updateMini(dt) {
+    miniT -= dt; if (miniT > 0) return; miniT = 0.25;
+    var c = document.getElementById("miniMap"); if (c) drawMiniTo(c, 96);
+    var dt2 = document.getElementById("dayText");
+    if (dt2) { var night = dayNow.phase === "night" || dayNow.phase === "dusk", L = Math.ceil(dayNow.left), txt = (night ? "🌙 夜晚 " : "☀️ 白天 ") + Math.floor(L / 60) + ":" + ("0" + (L % 60)).slice(-2); setText(dt2, txt); toggleCls(dt2, "night", night); }
+  }
+  function openMap() {
+    if (state !== STATE_PLAY) return; sfx.click();
+    state = STATE_PAUSE; run.forceNext = true; moveDir.x = 0; moveDir.y = 0; activePointerId = null;
+    var el = document.getElementById("mapScreen"), c = document.getElementById("bigMap");
+    drawMiniTo(c, Math.min(320, Math.floor(Math.min(W, H) - 60)));
+    setText(document.getElementById("mapInfo"), "老鼠窝 " + nests.filter(function (n) { return n.alive; }).length + " 个 · 已摧毁 " + nestStats.destroyed + " 个");
+    showScreen(el); if (CA.sfx.panel) CA.sfx.panel(true);
+  }
+  function closeMap() {
+    hideScreen(document.getElementById("mapScreen")); if (CA.sfx.panel) CA.sfx.panel(false);
+    if (state === STATE_PAUSE && dom.pauseScreen.classList.contains("hidden")) { state = STATE_PLAY; run.forceNext = true; }
+  }
+
+  // =======================================================================
   // 通用被动（所有猫）：#1 飞扑 · #2 连环扑 · #6 顺势冲刺 · #8 墙角逼宫
   // 只在玩家当前移动方向的扇形内动作；任何新点击立即取消；不让猫掉头。等级 = 本局抓捕数（15/40/80/150）
   // =======================================================================
@@ -3047,6 +3362,7 @@
     { id: "pounce", icon: "🐾", name: "飞扑", lv: ["身前 ±60° · 60px 内有鼠自动扑（冷却 1.2s）", "范围 70px", "冷却 0.9s", "扑中后立刻可再扑", "落地小冲击波，晕住周围老鼠（不计分）"] },
     { id: "chain", icon: "💫", name: "连环扑", lv: ["扑中后 0.4s 内 80px 还有鼠（移动方向 ±90°）再扑，最多 2 连", "最多 2 连", "最多 3 连", "最多 4 连", "最多 5 连"] },
     { id: "dash", icon: "💨", name: "顺势冲刺", lv: ["同方向直走 ≥1s 且前方 150px 有鼠：速度 ×1.3，1.0s", "×1.35，1.2s", "×1.4，1.5s", "×1.45，1.8s", "×1.5，2.2s"] },
+    { id: "poop", icon: "💩", name: "蹲窝便便", lv: ["停在老鼠窝上、不按方向静止 3 秒：便便摧毁老鼠窝 +30 分（开局 20 秒后可用；窝 45 秒后在别处重生）", "同上", "同上", "同上", "同上"] },
     { id: "corner", icon: "😰", name: "墙角逼宫", lv: ["老鼠背靠障碍且猫在 100px 内：发抖冒汗，速度 -60%", "同上", "两侧 50px 内的老鼠也被吓住", "同上", "同上"] }
   ];
   var uni = null;
@@ -3124,7 +3440,7 @@
         uni.chainWin = uni.chainLeft > 0 ? 0.4 : 0;
       } else { uni.chainLeft = 0; uni.chainWin = 0; }
     }
-    if (!uni.lunge && moving) {
+    if (!uni.lunge && moving && !poopSitting()) {
       if (uni.chainWin > 0) {
         uni.chainWin -= dt;
         var cm = uniFind(80 * esm, Math.PI / 2);
@@ -3142,6 +3458,7 @@
       var dx = m.x - cat.x, dy = m.y - cat.y, d = Math.sqrt(dx * dx + dy * dy);
       if (d > 100 * esm || d < 1) return;
       var px = m.x + dx / d * (m.r + 10 * esm), py = m.y + dy / d * (m.r + 10 * esm), obs = queryNearbyObstacles(px, py);
+      if (nestNear(px, py, 40 * esm)) { near.push(m); return; }
       for (var j = 0; j < obs.length; j++) { var o = obs[j]; if (px >= o.x && px <= o.x + o.w && py >= o.y && py <= o.y + o.h) { near.push(m); break; } }
     });
     for (i = 0; i < near.length; i++) {
@@ -3185,6 +3502,7 @@
     if (state === STATE_PLAY) {
       elapsedPlayTime += dt;
       updateCat(dt);
+      nestUpdate(dt);
       uniUpdate(dt);
       updateAbilities(dt);
       updateCamera(dt);
@@ -3196,6 +3514,7 @@
       updateEffects(dt);
       updateAnims(dt);
       updateHud();
+      updateMini(dt);
       refreshSnapshotIfDue(Date.now());
       maybeSendHeartbeat(Date.now());
     } else if (state === STATE_PAUSE) {
@@ -3216,7 +3535,9 @@
     var shaking = shakeT > 0 && state === STATE_PLAY;
     if (shaking) { shakeT -= 1 / 60; var k0 = shakeAmp * Math.max(0, shakeT / 0.15); ctx.save(); ctx.translate((Math.random() - 0.5) * 2 * k0, (Math.random() - 0.5) * 2 * k0); if (shakeT <= 0) shakeAmp = 0; }
     drawBackground();
+    drawFences();
     drawObstacles();
+    drawNestsGround();
     drawAbilityGround();
     drawDust();
     uniDrawUnder();
@@ -3224,8 +3545,11 @@
     drawAbilityBehindCat();
     drawCat();
     drawAbilityOverlay();
+    drawNight();
+    drawPoopRing();
     drawEffects();
     uniDrawOver();
+    drawNestArrows();
     drawJoystick();
     if (shaking) ctx.restore();
   }
@@ -3405,6 +3729,10 @@
     get abilityPanelOpen() { return !dom.abilityScreen.classList.contains("hidden"); },
     get score() { return score; },
     get catches() { return catches; },
+    get nests() { return { list: nests.map(function (n) { return { x: n.x, y: n.y, alive: n.alive, owned: n.owned, silT: n.silT }; }), destroyed: nestStats.destroyed, poop: poopSit.t, day: dayNow, cap: mouseCap() }; },
+    setElapsed: function (t) { elapsedPlayTime = t; },
+    nestHere: function (dx, dy) { var n = newNest({ x: cat.x + (dx || 0), y: cat.y + (dy || 0) }); nests.push(n); return nests.length - 1; },
+    clearNests: function () { nests.length = 0; },
     get uni() { return { cd: uni.cd, lunge: !!uni.lunge, chainN: uni.chainN, dashT: uni.dashT, dashMul: uni.dashMul, straightT: uni.straightT, stats: uni.stats, corner: mice.filter(function (m) { return m.cornerT > 0; }).length }; },
     get audio() { return window.CatAudio ? window.CatAudio.debug() : null; },
     get combo() { return combo; },
