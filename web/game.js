@@ -586,7 +586,7 @@
 
   function resetScoring() {
     uniReset(); score = 0; catches = 0; catchesGrey = 0; catchesBrown = 0; catchesGold = 0;
-    combo = 0; comboTimer = 0; comboMax = 0; elapsedPlayTime = 0;
+    combo = 0; comboTimer = 0; comboMax = 0; elapsedPlayTime = 0; hitStopT = 0; hitStopCd = 0; impacts.length = 0; flyers.length = 0; comboBanner = null; comboRings.length = 0;
   }
 
   function updateComboTimer(dt) {
@@ -922,6 +922,7 @@
 
     spawnScorePopup(m.x, m.y, gained);
     spawnCatchParticles(m.x, m.y);
+    juiceCapture(m, gained);
     cat.squash = 1;
     startGulp(m);
     if (m.type === "grey") sfx.catchGrey(m);
@@ -1758,6 +1759,74 @@
     }
     scorePopups.push({ x: x, y: y, amount: amount, age: 0, life: 0.9, n: 1 });
     if (scorePopups.length > 8) scorePopups.shift();
+  }
+
+  // ---- v13 打击感（A5/B5）：命中停顿、星形爆点、得分飞向计分板、镜头轻推、连击分级 ----
+  var hitStopT = 0, hitStopCd = 0, impacts = [], flyers = [], comboBanner = null, comboRings = [];
+  var COMBO_TIERS = [5, 10, 20, 30, 50];
+  function juiceCapture(m, gained) {
+    var gold = m.type === "gold", now = elapsedPlayTime;
+    if (!reducedMotion && now >= hitStopCd) { hitStopT = gold ? 0.07 : 0.035; hitStopCd = now + 0.22; }
+    if (impacts.length > 10) impacts.shift();
+    impacts.push({ x: m.x, y: m.y, age: 0, life: gold ? 0.45 : 0.3, gold: gold, rot: Math.random() * 6 });
+    if (flyers.length < 12) flyers.push({ sx: worldToScreenX(m.x), sy: worldToScreenY(m.y), age: 0, life: 0.55, gold: gold, amt: gained });
+    if (!reducedMotion) { var dx = m.x - cat.x, dy = m.y - cat.y, l = Math.sqrt(dx * dx + dy * dy) || 1, k = gold ? 7 : 3.5; camera.x += dx / l * k; camera.y += dy / l * k; }
+    if (COMBO_TIERS.indexOf(combo) >= 0 || (combo > 50 && combo % 25 === 0)) {
+      comboBanner = { n: combo, age: 0, life: 1.1, tier: COMBO_TIERS.indexOf(combo) };
+      comboRings.push({ age: 0, life: 0.6 }); if (CA.sfx.tier) CA.sfx.tier(combo);
+      if (dom.comboText) { dom.comboText.classList.remove("tier-pop"); void dom.comboText.offsetWidth; dom.comboText.classList.add("tier-pop"); }
+      if (!reducedMotion) hitStopT = Math.max(hitStopT, 0.06);
+    }
+  }
+  var scoreTarget = { x: 70, y: 32, t: 0 };
+  function updateJuice(dt) {
+    var i;
+    for (i = impacts.length - 1; i >= 0; i--) { impacts[i].age += dt; if (impacts[i].age >= impacts[i].life) impacts.splice(i, 1); }
+    for (i = comboRings.length - 1; i >= 0; i--) { comboRings[i].age += dt; if (comboRings[i].age >= comboRings[i].life) comboRings.splice(i, 1); }
+    if (comboBanner) { comboBanner.age += dt; if (comboBanner.age >= comboBanner.life) comboBanner = null; }
+    scoreTarget.t -= dt;
+    if (scoreTarget.t <= 0 && dom.scoreText) { var r = dom.scoreText.getBoundingClientRect(); scoreTarget.x = r.left + 22; scoreTarget.y = r.top + r.height / 2; scoreTarget.t = 1; }
+    for (i = flyers.length - 1; i >= 0; i--) {
+      var f = flyers[i]; f.age += dt;
+      if (f.age >= f.life) { flyers.splice(i, 1); if (dom.scoreText) { dom.scoreText.classList.remove("bump"); void dom.scoreText.offsetWidth; dom.scoreText.classList.add("bump"); } }
+    }
+  }
+  function drawJuice() {
+    var i, u = s(1) * entityScaleMult;
+    for (i = 0; i < impacts.length; i++) {
+      var im = impacts[i], k = im.age / im.life, sx = worldToScreenX(im.x), sy = worldToScreenY(im.y) - s(6), e = 1 - Math.pow(1 - k, 3);
+      ctx.save(); ctx.translate(sx, sy); ctx.rotate(im.rot + k * 0.6); ctx.globalAlpha = 1 - k;
+      var R = (im.gold ? 46 : 32) * u * (0.4 + e), n = 8;
+      ctx.fillStyle = im.gold ? "#fff1a8" : "#fffbe6"; ctx.beginPath();
+      for (var j = 0; j < n * 2; j++) { var a = j / (n * 2) * 6.2832, rr = j % 2 ? R * 0.42 : R; ctx.lineTo(Math.cos(a) * rr, Math.sin(a) * rr); }
+      ctx.closePath(); ctx.fill();
+      ctx.strokeStyle = im.gold ? "#ffb700" : "#ffc76b"; ctx.lineWidth = 2.5 * u * (1 - k); ctx.lineCap = "round";
+      for (j = 0; j < 6; j++) { var b = j / 6 * 6.2832 + 0.3; ctx.beginPath(); ctx.moveTo(Math.cos(b) * R * 1.05, Math.sin(b) * R * 1.05); ctx.lineTo(Math.cos(b) * R * 1.5, Math.sin(b) * R * 1.5); ctx.stroke(); }
+      ctx.restore();
+    }
+    ctx.globalAlpha = 1;
+    var cx = worldToScreenX(cat.x), cy = worldToScreenY(cat.y);
+    for (i = 0; i < comboRings.length; i++) { var cr = comboRings[i], kk = cr.age / cr.life; ctx.strokeStyle = "rgba(255,150,60," + (1 - kk) + ")"; ctx.lineWidth = s(6) * (1 - kk) + 1; ctx.beginPath(); ctx.arc(cx, cy, s(40 + kk * 120) * entityScaleMult, 0, 7); ctx.stroke(); }
+    for (i = 0; i < flyers.length; i++) {
+      var f = flyers[i], t = f.age / f.life, ee = t * t * (3 - 2 * t), arc = Math.sin(t * Math.PI) * s(60);
+      var fx2 = f.sx + (scoreTarget.x - f.sx) * ee, fy2 = f.sy + (scoreTarget.y - f.sy) * ee - arc;
+      ctx.globalAlpha = 0.5 + 0.5 * (1 - t);
+      ctx.fillStyle = f.gold ? "#ffc400" : "#ffe08a"; ctx.strokeStyle = "#c97a1e"; ctx.lineWidth = s(1.5);
+      ctx.beginPath(); ctx.arc(fx2, fy2, s(f.gold ? 8 : 6) * (1 - t * 0.4), 0, 7); ctx.fill(); ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+    if (comboBanner) {
+      var cb = comboBanner, a2 = cb.age, pop = a2 < 0.15 ? 0.5 + a2 / 0.15 * 0.7 : 1.2 - Math.min(0.2, (a2 - 0.15) * 1.5);
+      var cols = ["#ff9d4d", "#ff6b6b", "#c86bff", "#4db8ff", "#ffcc00"], col = cols[Math.max(0, Math.min(4, cb.tier < 0 ? 4 : cb.tier))];
+      ctx.globalAlpha = a2 > cb.life - 0.3 ? (cb.life - a2) / 0.3 : 1;
+      ctx.save(); ctx.translate(W / 2, H * 0.3); ctx.scale(pop, pop); ctx.rotate(-0.05);
+      ctx.font = "900 " + Math.round(s(40)) + "px sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.lineJoin = "round";
+      ctx.lineWidth = s(8); ctx.strokeStyle = "#fff"; ctx.strokeText("连击 x" + cb.n + "！", 0, 0);
+      ctx.fillStyle = col; ctx.fillText("连击 x" + cb.n + "！", 0, 0);
+      ctx.font = "800 " + Math.round(s(15)) + "px sans-serif"; ctx.lineWidth = s(5); var sub = ["手感来了", "好厉害", "停不下来", "猫中之王", "传说喵"][Math.max(0, Math.min(4, cb.tier < 0 ? 4 : cb.tier))];
+      ctx.strokeText(sub, 0, s(32)); ctx.fillStyle = "#7a4a2a"; ctx.fillText(sub, 0, s(32));
+      ctx.restore(); ctx.globalAlpha = 1;
+    }
   }
 
   function spawnCatchParticles(x, y) {
@@ -3530,17 +3599,19 @@
     updateMusic();
     if (state === STATE_PLAY) {
       elapsedPlayTime += dt;
-      updateCat(dt);
+      var sdt = dt; if (hitStopT > 0) { hitStopT -= dt; sdt = dt * 0.12; } // 命中停顿：只放慢动作，不影响计时
+      updateCat(sdt);
       nestUpdate(dt);
-      uniUpdate(dt);
-      updateAbilities(dt);
+      uniUpdate(sdt);
+      updateAbilities(sdt);
       updateCamera(dt);
       ensureChunksAround(camera.x, camera.y);
       pruneFarChunks(dt, camera.x, camera.y);
-      updateMice(dt);
+      updateMice(sdt);
       trySpawnMouse();
       updateComboTimer(dt);
       updateEffects(dt);
+      updateJuice(dt);
       updateAnims(dt);
       updateHud();
       updateMini(dt);
@@ -3577,6 +3648,7 @@
     drawNight();
     drawPoopRing();
     drawEffects();
+    drawJuice();
     uniDrawOver();
     drawNestArrows();
     drawJoystick();

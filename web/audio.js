@@ -143,6 +143,7 @@
       tone(B, t + 0.02, 300, 0.12, "sine", 0.22, 120); // 咕
     },
     combo: function (n) { if (!canPlay("combo", 3, n >= 10 ? 0.16 : 0.09)) return; /* 高连击时降低密度 */ var t = now(), f = 660 * Math.pow(2, Math.min(n, 12) / 12); var cv = n >= 10 ? 0.7 : 1; tone(sfxBus, t + 0.08, f, 0.09, "square", 0.06 * cv); tone(sfxBus, t + 0.12, f * 1.5, 0.1, "square", 0.05 * cv); },
+    tier: function (n) { if (!canPlay("tier", 4, 0.4)) return; var t = now(); duck(6, 0.3); var base = [72, 74, 76, 79, 84][Math.min(4, Math.floor(Math.log(n / 5) / Math.log(2)))] || 84; [0, 4, 7, 12].forEach(function (d, i) { tone(sfxBus, t + i * 0.06, N(base + d), 0.16, "triangle", 0.09); }); noise(sfxBus, t + 0.2, 0.25, 0.03, 6000); },
     evolve: function () { if (!canPlay("evolve", 5, 0.5)) return; var t = now(); duck(12, 1); [60, 64, 67, 72, 76, 79, 84].forEach(function (m, i) { tone(sfxBus, t + i * 0.07, N(m), 0.3, "triangle", 0.12); }); noise(sfxBus, t + 0.45, 0.6, 0.05, 7000); tone(sfxBus, t + 0.5, N(84), 0.8, "sine", 0.09); },
     skill: function (skin, phase, stage) {
       var key = "sk_" + phase; if (!canPlay(key, phase === "fire" ? 3 : 2, phase === "hit" ? 0.08 : 0.05)) return;

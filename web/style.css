@@ -508,3 +508,10 @@ body.reduce-motion * { animation-duration: .001s !important; transition-duration
 .mini-map { position: fixed; right: calc(10px + env(safe-area-inset-right)); bottom: calc(10px + env(safe-area-inset-bottom)); width: 96px; height: 96px; border-radius: 14px; border: 3px solid #ffb36b; box-shadow: 0 3px 8px rgba(0,0,0,.18); z-index: 6; cursor: pointer; background: #b8e6a0; }
 .map-panel { text-align: center; }
 .big-map { border-radius: 16px; border: 3px solid #ffb36b; display: block; margin: 8px auto; max-width: 100%; }
+
+/* v13 打击感 */
+#scoreText.bump { animation: scoreBump .18s ease-out; }
+@keyframes scoreBump { 0% { transform: scale(1); } 45% { transform: scale(1.14); } 100% { transform: scale(1); } }
+#comboText.tier-pop { animation: tierPop .5s cubic-bezier(.2,1.6,.4,1); }
+@keyframes tierPop { 0% { transform: scale(.6); } 60% { transform: scale(1.35); } 100% { transform: scale(1); } }
+body.reduce-motion #scoreText.bump, body.reduce-motion #comboText.tier-pop { animation: none; }
