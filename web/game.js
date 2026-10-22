@@ -2888,8 +2888,19 @@
     } else {
       setText(dom.rankText, "排名：第 " + rank + " 名");
     }
+    rankToast(rank);
   }
 
+  // v20：名次变化时左上角小提示（约 2 秒，频繁变化合并为最新一条）
+  var rtLast = null, rtTimer = 0, rtEl = document.getElementById("rankToast");
+  function rankToast(rank) {
+    if (!rtEl || state !== STATE_PLAY) { rtLast = rank; return; }
+    if (rtLast == null || rtLast === rank) { rtLast = rank; return; }
+    var up = rank < rtLast; rtLast = rank;
+    rtEl.textContent = (up ? "⬆ 升到第 " : "⬇ 掉到第 ") + rank + " 名";
+    rtEl.classList.add("show"); clearTimeout(rtTimer);
+    rtTimer = setTimeout(function () { rtEl.classList.remove("show"); }, 2000);
+  }
   function refreshSnapshotIfDue(now, force) {
     if (!backendConfigured) return;
     if (!force && leaderboardSnapshotAt !== 0 && now - leaderboardSnapshotAt < LEADERBOARD_POLL_INTERVAL_MS) return;
@@ -4027,6 +4038,8 @@
     blue: { name: "滚滚碾压", R: 160, half: 20, cd: 2.2, max: 3 },
     siamese: { name: "高音连扑", R: 100, half: 60, cd: 1.8, max: 3 }
   };
+  // v20：点老鼠触发距离 = 固定 220 世界单位（全猫一致、任意方向；手机默认视野短边约 480 单位，半宽 240）
+  var SIG_RANGE = 220, SIG_DASH_V = 1500;
   var SIG_COL = { orange: "#ff8a2a", black: "#8a5cff", white: "#6cc8ff", calico: "#ff6fa8", blue: "#5b8cff", siamese: "#3fa9ff" };
   var sig = null, sigCd = 0, sigFx = [], sigFlash = 0, sigCount = { fired: 0, caught: 0 };
   function sigParams() {
@@ -4035,7 +4048,7 @@
     if (st >= 4) { if (currentSkin === "black" || currentSkin === "calico") p.cd *= 0.85; else p.max += 1; }
     p.lv5 = st >= 5; return p;
   }
-  function sigReset() { sig = null; sigCd = 0; sigFx.length = 0; sigFlash = 0; sigCount = { fired: 0, caught: 0 }; }
+  function sigReset() { rtLast = null; sig = null; sigCd = 0; sigFx.length = 0; sigFlash = 0; sigCount = { fired: 0, caught: 0 }; }
   function terrLineClear(x0, y0, x1, y1) {
     if (!TERR) return true; var d = distance(x0, y0, x1, y1), n = Math.ceil(d / 18);
     for (var i = 1; i <= n; i++) { var k = i / n; if (TERR.blocked(x0 + (x1 - x0) * k, y0 + (y1 - y0) * k, 0)) return false; } return true;
@@ -4043,9 +4056,16 @@
   function sigFxAdd(o) { if (o.opt && resScale < 1 && (dayNow.night > 0.5 || Math.random() < 0.5)) return; /* v19：弱设备夜晚去掉额外特效 */ o.age = 0; sigFx.push(o); }
   function sigStart(m, p) {
     var dx = m.x - cat.x, dy = m.y - cat.y, d = Math.sqrt(dx * dx + dy * dy) || 1;
-    sig = { kind: p.kind, p: p, m: m, seed: m.seed, ph: "wind", t: 0, wind: 0.1, ux: dx / d, uy: dy / d, caught: 0, hitStopped: false, go: false, hide: false, z: 0, n: 0 };
+    sig = { kind: p.kind, p: p, m: m, seed: m.seed, ph: "wind", t: 0, wind: 0.06, ux: dx / d, uy: dy / d, caught: 0, hitStopped: false, go: false, hide: false, z: 0, n: 0 };
     sigCd = p.cd; uniCancel(); sigCount.fired++;
     if (CA.sfx.uni) CA.sfx.uni("pounce", 0); buzz(12);
+  }
+  var SIG_APP = { orange: 0.45, white: 0.4, calico: 0.55, blue: 0.4, siamese: 0.5 };
+  function sigDash() {
+    var S = sig, d = distance(S.m.x, S.m.y, cat.x, cat.y);
+    S.app = S.kind === "black" ? 1e9 : SIG_APP[S.kind] * S.p.R;
+    if (d <= S.app) { sigGo(); return; }
+    S.ph = "dash"; S.t = 0; S.go = true; if (CA.sfx.uni) CA.sfx.uni("dash");
   }
   function sigGo() {
     var S = sig, m = S.m, p = S.p, esm = entityScaleMult; S.ph = "go"; S.t = 0; S.go = true;
@@ -4064,8 +4084,8 @@
     S.done = 0;
   }
   function sigCanFire(m, p) {
-    var dx = m.x - cat.x, dy = m.y - cat.y, d = Math.sqrt(dx * dx + dy * dy); if (d > p.R || d < 1) return false;
-    if (p.half < Math.PI) { var fx0 = Math.cos(cat.facing), fy0 = Math.sin(cat.facing); if ((dx * fx0 + dy * fy0) / d < Math.cos(p.half)) return false; }
+    var dx = m.x - cat.x, dy = m.y - cat.y, d = Math.sqrt(dx * dx + dy * dy); if (d > SIG_RANGE || d < 1) return false;
+    if (p.kind !== "black" && !terrLineClear(cat.x, cat.y, m.x, m.y)) return false;
     if (p.kind === "black") { var bx = m.x - dx / d * cat.r * 0.6, by = m.y - dy / d * cat.r * 0.6; if (!terrLineClear(cat.x, cat.y, bx, by) || (TERR && TERR.blocked(bx, by, cat.r * 0.8))) return false; }
     if (p.kind === "calico" || p.kind === "blue") { if (!terrLineClear(cat.x, cat.y, m.x, m.y)) return false; }
     return true;
@@ -4092,7 +4112,18 @@
     var S = sig; if (!S) return; var esm = entityScaleMult;
     var alive = mice.indexOf(S.m) >= 0 && S.m.seed === S.seed && uniOk(S.m);
     S.t += dt;
-    if (S.ph === "wind") { if (!alive) { sig = null; sigCd = Math.min(sigCd, 0.3); return; } if (S.t >= S.wind) sigGo(); return; }
+    if (S.ph === "wind") { if (!alive) { sig = null; sigCd = Math.min(sigCd, 0.3); return; } if (S.t >= S.wind) sigDash(); return; }
+    if (S.ph === "dash") { // v20：快速冲刺贴近，再放招牌效果
+      if (!alive) { sig = null; sigCd = Math.min(sigCd, 0.3); return; }
+      var dm = S.m, ddx = dm.x - cat.x, ddy = dm.y - cat.y, dd = Math.sqrt(ddx * ddx + ddy * ddy) || 1;
+      if (dd <= S.app || S.t > 0.3) { sigGo(); return; }
+      var st0 = Math.min(SIG_DASH_V * dt, dd - S.app), ox = cat.x, oy = cat.y; S.ux = ddx / dd; S.uy = ddy / dd;
+      cat.x += S.ux * st0; cat.y += S.uy * st0; cat.facing = Math.atan2(S.uy, S.ux);
+      var ob2 = queryNearbyObstacles(cat.x, cat.y); for (var j = 0; j < ob2.length; j++) resolveCircleAabb(cat, ob2[j]); if (TERR) TERR.push(cat);
+      if (!reducedMotion) sigFxAdd({ type: "wind", x: cat.x, y: cat.y, a: Math.atan2(S.uy, S.ux), off: (Math.random() - 0.5) * 24, opt: 1 });
+      if (distance(ox, oy, cat.x, cat.y) < st0 * 0.35) sigGo(); // 撞墙就地出招
+      return;
+    }
     var k = Math.min(1, S.t / S.dur), e, step, px = cat.x, py = cat.y;
     if (S.kind === "black") {
       if (k >= 1 && !S.arrived) { S.arrived = true; cat.x = S.bx; cat.y = S.by; S.hide = false; sigFxAdd({ type: "smoke", x: cat.x, y: cat.y }); if (CA.sfx.uni) CA.sfx.uni("land"); }
@@ -4146,6 +4177,7 @@
     if (flag) { var fx0 = worldToScreenX(flag.x), fy0 = worldToScreenY(flag.y); ctx.fillStyle = "rgba(0,0,0,.18)"; ctx.beginPath(); ctx.ellipse(fx0, fy0, s(9), s(4), 0, 0, 7); ctx.fill();
       ctx.strokeStyle = "#6b4a2a"; ctx.lineWidth = s(2.5); ctx.beginPath(); ctx.moveTo(fx0, fy0); ctx.lineTo(fx0, fy0 - s(28)); ctx.stroke();
       ctx.fillStyle = col; ctx.beginPath(); ctx.moveTo(fx0, fy0 - s(28)); ctx.lineTo(fx0 + s(16), fy0 - s(23) + Math.sin(t * 8) * s(1.5)); ctx.lineTo(fx0, fy0 - s(17)); ctx.fill(); }
+    if (lock && !sig) { ctx.strokeStyle = "rgba(255,255,255,.22)"; ctx.lineWidth = s(1.5); ctx.setLineDash([s(6), s(8)]); ctx.beginPath(); ctx.arc(csx, csy + s(10), s(SIG_RANGE), 0, 7); ctx.stroke(); ctx.setLineDash([]); }
     if (lock) { var m = lock.m, mx = worldToScreenX(m.x), my = worldToScreenY(m.y) + s(4), r = s(20) + Math.sin(t * 9) * s(1.5);
       if (lock.t < 0.6) { ctx.globalAlpha = 1 - lock.t / 0.6; ctx.setLineDash([s(5), s(5)]); ctx.strokeStyle = "#fff"; ctx.lineWidth = s(2); ctx.beginPath(); ctx.moveTo(csx, csy); ctx.lineTo(mx, my); ctx.stroke(); ctx.setLineDash([]); ctx.globalAlpha = 1; }
       ctx.strokeStyle = col; ctx.lineWidth = s(3.5); ctx.lineCap = "round";
@@ -4160,9 +4192,9 @@
       ctx.globalAlpha = 1; }
     if (sigCd > 0 && lock) { var P = sigParams(), fr = 1 - sigCd / P.cd; ctx.strokeStyle = "rgba(255,255,255,.75)"; ctx.lineWidth = s(2); ctx.beginPath(); ctx.arc(csx, csy + s(14), s(22), -Math.PI / 2, -Math.PI / 2 + fr * 6.283); ctx.stroke(); }
     // 毛线 / 眼光
-    if (sig && sig.go && sig.kind === "calico") { var mm = sig.m; ctx.strokeStyle = "#ff6fa8"; ctx.lineWidth = s(3); ctx.beginPath(); ctx.moveTo(csx, csy); ctx.quadraticCurveTo((csx + worldToScreenX(mm.x)) / 2, (csy + worldToScreenY(mm.y)) / 2 - s(20), worldToScreenX(mm.x), worldToScreenY(mm.y)); ctx.stroke();
+    if (sig && sig.ph === "go" && sig.kind === "calico") { var mm = sig.m; ctx.strokeStyle = "#ff6fa8"; ctx.lineWidth = s(3); ctx.beginPath(); ctx.moveTo(csx, csy); ctx.quadraticCurveTo((csx + worldToScreenX(mm.x)) / 2, (csy + worldToScreenY(mm.y)) / 2 - s(20), worldToScreenX(mm.x), worldToScreenY(mm.y)); ctx.stroke();
       ctx.strokeStyle = "#ffd23f"; ctx.lineWidth = s(1.5); ctx.stroke(); emojiQuick("🧶", worldToScreenX(mm.x), worldToScreenY(mm.y) - s(8), s(18), 1); }
-    if (sig && sig.go && sig.kind === "orange") { ctx.setLineDash([s(4), s(6)]); ctx.strokeStyle = "rgba(255,138,42,.8)"; ctx.lineWidth = s(2.5); ctx.beginPath(); ctx.moveTo(worldToScreenX(sig.sx), worldToScreenY(sig.sy));
+    if (sig && sig.ph === "go" && sig.kind === "orange") { ctx.setLineDash([s(4), s(6)]); ctx.strokeStyle = "rgba(255,138,42,.8)"; ctx.lineWidth = s(2.5); ctx.beginPath(); ctx.moveTo(worldToScreenX(sig.sx), worldToScreenY(sig.sy));
       var ex = sig.sx + sig.ux * sig.len, ey = sig.sy + sig.uy * sig.len; ctx.quadraticCurveTo(worldToScreenX((sig.sx + ex) / 2), worldToScreenY((sig.sy + ey) / 2) - s(84 * entityScaleMult), worldToScreenX(ex), worldToScreenY(ey)); ctx.stroke(); ctx.setLineDash([]); }
   }
   function sigDrawOver() {
@@ -4411,6 +4443,7 @@
     get holds() { return ab ? { total: ab.holds, by: ab.hold, plans: ab.plans, cancels: ab.cancels } : null; },
     get aimFxLive() { return ab ? ab.fx.filter(function (f) { return f.k === "aim"; }).map(function (f) { return { age: f.age, tele: f.tele, hits: f.hits, ic: f.ic }; }) : []; },
     get drawStats() { return { drawn: drawStats.drawn, full: drawStats.full, pool: mousePool.length, total: mice.length }; },
+    rankToast: function (r) { rankToast(r); },
     get perf() { return { last: perfWin.last, hist: perfWin.hist.slice(), resScale: resScale, dpr: DPR, updMs: Math.round(perfWin.upd * 100) / 100, drawMs: Math.round(perfWin.drw * 100) / 100 }; },
     setForceBeh: function (b) { forceBeh = b || null; },
     setNoSpawn: function (v) { noSpawn = !!v; },

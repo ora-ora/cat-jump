@@ -561,11 +561,11 @@ body.reduce-motion #scoreText.bump, body.reduce-motion #comboText.tier-pop { ani
 
 /* v19 TAP3：游戏中无按钮，HUD 只有两行描边白字、不可点 */
 #hud.tap3 { pointer-events: none; }
-#hud.tap3 #hudRight, #hud.tap3 #rankText, #hud.tap3 #abilityBadge, #hud.tap3 #missionChip, #hud.tap3 #comboText { display: none !important; }
+#hud.tap3 #hudLbBtn, #hud.tap3 #muteBtn, #hud.tap3 #rankText, #hud.tap3 #abilityBadge, #hud.tap3 #missionChip, #hud.tap3 #comboText { display: none !important; }
 #hud.tap3 #scoreText, #hud.tap3 #dayText { background: none !important; box-shadow: none !important; border: 0 !important; color: #fff; font-weight: 800;
   text-shadow: 0 0 3px rgba(60,40,20,.9), 0 1px 2px rgba(60,40,20,.9), 1px 0 2px rgba(60,40,20,.8), -1px 0 2px rgba(60,40,20,.8); padding: 0; }
 #hud.tap3 #scoreText { font-size: 24px; position: fixed; left: calc(14px + env(safe-area-inset-left)); top: calc(10px + env(safe-area-inset-top)); }
-#hud.tap3 #dayText { font-size: 15px; position: fixed; right: calc(14px + env(safe-area-inset-right)); top: calc(14px + env(safe-area-inset-top)); }
+#hud.tap3 #dayText { font-size: 15px; position: fixed; left: 50%; transform: translateX(-50%); top: calc(14px + env(safe-area-inset-top)); }
 #hud.tap3.steering { opacity: 1; }
 #miniMap { display: none !important; }
 .pause-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 10px 0 4px; }
@@ -573,3 +573,13 @@ body.reduce-motion #scoreText.bump, body.reduce-motion #comboText.tier-pop { ani
 .pause-tip { margin: 4px 0 8px; }
 canvas#game { touch-action: none; }
 .onboard-panel .ob-d { white-space: pre-line; text-align: left; }
+
+/* v20 顶部 HUD：右上暂停按钮 + 左上名次提示 */
+#hud.tap3 #hudRight { position: fixed; right: calc(8px + env(safe-area-inset-right)); top: calc(6px + env(safe-area-inset-top)); display: block; }
+#hud.tap3 #pauseBtn { pointer-events: auto; width: 46px; height: 46px; min-width: 46px; font-size: 20px; border-radius: 14px; background: rgba(255,255,255,.35); border: 1.5px solid rgba(255,255,255,.7); color: #fff; text-shadow: 0 1px 2px rgba(0,0,0,.5); touch-action: manipulation; }
+#rankToast { position: fixed; left: calc(12px + env(safe-area-inset-left)); top: calc(48px + env(safe-area-inset-top)); z-index: 30; pointer-events: none;
+  font: 700 13px/1.2 system-ui, sans-serif; color: #fff; background: rgba(40,30,20,.45); padding: 5px 10px; border-radius: 10px; max-width: 46vw;
+  opacity: 0; transform: translateY(-4px); transition: opacity .25s, transform .25s; }
+#rankToast.show { opacity: 1; transform: none; }
+#hud.tap3 #scoreText::before { content: none; }
+#hud.tap3 #scoreText, #hud.tap3 #dayText { color: #fff !important; text-shadow: 0 1px 2px rgba(0,0,0,.55), 0 0 3px rgba(0,0,0,.35); }
