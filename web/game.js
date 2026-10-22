@@ -566,6 +566,9 @@
     var speed = Math.sqrt(cat.vx * cat.vx + cat.vy * cat.vy);
     if (speed > 4) cat.facing = Math.atan2(cat.vy, cat.vx);
     cat.runCycle += dt * (speed / 24 + 0.3);
+    // v15 步幅同步：步态相位按实际移动距离推进（一个完整步态周期 ≈ 1.15 个身长），落脚不打滑
+    var g0 = cat.gait || 0; cat.gait = g0 + speed * dt / (115 * cat.r * CAT_UNIT_PER_R );
+    if (speed > 150 && !reducedMotion && Math.floor(g0 * 2) !== Math.floor(cat.gait * 2)) spawnDust(cat.x - Math.cos(cat.facing) * cat.r * 0.5, cat.y + cat.r * 46 * CAT_UNIT_PER_R, cat.facing, 5 + Math.random() * 3);
     cat.squash = Math.max(0, cat.squash - dt * 4);
   }
 
@@ -2047,7 +2050,7 @@
     var sw = o.w * SCALE, sh = o.h * SCALE;
     if (sx + sw < -20 || sx > W + 20 || sy + sh < -20 || sy > H + 20) return;
     var cx = sx + sw / 2, cy = sy + sh / 2;
-    if (o.kind === "tree") { var ts = SCALE * o.sc; shadow(worldToScreenX(o.tx) + 34 * ts, worldToScreenY(o.ty) - 4 * ts, 90 * ts); return; }
+    if (o.kind === "tree") { var ts = SCALE * o.sc; if (resScale < 1 && dayNow.night > 0.5) return; shadow(worldToScreenX(o.tx) + 34 * ts, worldToScreenY(o.ty) - 4 * ts, 90 * ts); return; }
     var oim = IMG[o.kind];
     if (oim) { shadow(cx + sw * 0.05, sy + sh * 0.95, sw * 0.6); var ow2 = sw * (o.kind === "crate" ? 1.15 : 1.35), oh2 = ow2 * oim.height / oim.width; ctx.drawImage(fit(oim, oh2), cx - ow2 / 2, sy + sh * 1.02 - oh2, ow2, oh2); return; }
     ctx.save();
@@ -2174,7 +2177,7 @@
   var shadowCv = null;
   function shadowSprite() { if (shadowCv) return shadowCv; var c = document.createElement("canvas"); c.width = 128; c.height = 40; var g = c.getContext("2d"); g.translate(64, 20); g.scale(1, 0.3125); var gr = g.createRadialGradient(0, 0, 0, 0, 0, 62); gr.addColorStop(0, "rgba(30,70,25,0.42)"); gr.addColorStop(0.55, "rgba(30,70,25,0.24)"); gr.addColorStop(1, "rgba(30,70,25,0)"); g.fillStyle = gr; g.beginPath(); g.arc(0, 0, 62, 0, 7); g.fill(); return (shadowCv = c); }
   function shadow(x, y, rx) {
-    var w = rx * 2.5; ctx.drawImage(shadowSprite(), x - w / 2 + rx * 0.12, y - w * 0.156 + rx * 0.05, w, w * 0.3125);
+    var w = rx * 2.5; ctx.drawImage(shadowSprite(), x - w / 2, y - w * 0.156, w, w * 0.3125);
   }
 
   function drawDust() {
@@ -2209,10 +2212,27 @@
   // v13 A2：橘子改用手绘精灵（img/orange_*.png，正面/侧面/背面 3 张），动作用弹跳 + 挤压拉伸做；其它 5 只猫暂保留原画
   // v14：全部角色/道具改为手绘精灵（img/*.webp，AI 生成后抠图；约 400KB）。加载完成前回退到原来的程序绘制
   var IMG = {}, IMG_LIST = [];
-  ["orange", "black", "white", "calico", "blue", "siamese"].forEach(function (k) { IMG_LIST.push(k + "_front", k + "_side", k + "_back", k + "_run_side", k + "_run_front", k + "_run_back"); });
+  ["orange", "black", "white", "calico", "blue", "siamese"].forEach(function (k) { IMG_LIST.push(k + "_front", k + "_side", k + "_back"); });
   ["grey", "brown", "gold"].forEach(function (k) { IMG_LIST.push("m_" + k + "_front", "m_" + k + "_side", "m_" + k + "_back"); });
   IMG_LIST.push("nest", "nest_dead", "poop", "crate", "bush", "rock", "tree", "tree_fruit", "flowerbed", "stones", "fence", "grass");
   var imgLoaded = 0;
+  // v15：跑步帧按需加载（只加载当前选中的猫），并测量每帧最低爪子到帧底的距离 → 把爪子钉在地面线上
+  var runReq = {}, FOOT = {};
+  function footScan(k, im, n) {
+    try { var c = document.createElement("canvas"); c.width = im.width; c.height = im.height; var g = c.getContext("2d"); g.drawImage(im, 0, 0);
+      var d = g.getImageData(0, 0, im.width, im.height).data, fw = Math.floor(im.width / n), gaps = [], tops = [];
+      for (var i = 0; i < n; i++) { var lo = -1, hi = -1;
+        for (var y = im.height - 1; y >= 0 && lo < 0; y--) for (var x = i * fw; x < (i + 1) * fw; x += 2) if (d[(y * im.width + x) * 4 + 3] > 60) { lo = y; break; }
+        for (y = 0; y < im.height && hi < 0; y++) for (x = i * fw; x < (i + 1) * fw; x += 2) if (d[(y * im.width + x) * 4 + 3] > 60) { hi = y; break; }
+        gaps.push((im.height - 1 - lo) / im.height); tops.push(hi / im.height); }
+      FOOT[k] = { gap: gaps, top: tops };
+    } catch (e) { FOOT[k] = null; }
+  }
+  function loadRun(skin) {
+    if (runReq[skin]) return; runReq[skin] = 1;
+    [["side", 9], ["front", 8], ["back", 8]].forEach(function (p) { var k = skin + "_run_" + p[0], im = new Image();
+      im.onload = function () { footScan(k, im, p[1]); im._n = k; IMG[k] = im; }; im.src = "img/" + k + ".webp?v=" + (window.CAT_BUILD && window.CAT_BUILD.sha || "1"); });
+  }
   IMG_LIST.forEach(function (k) { var im = new Image(); im.decoding = "async"; im.onload = function () { im._n = k; IMG[k] = im; imgLoaded++; if (/_front$/.test(k)) setTimeout(function () { try { paintSkinCards(); } catch (e) {} }, 0); }; im.src = "img/" + k + ".webp?v=" + (window.CAT_BUILD && window.CAT_BUILD.sha || "1"); });
   // 预缩放缓存：按屏幕像素高度（量化到 ~3%）把精灵缩放一次，之后每帧近似 1:1 贴图（比每帧缩放大图快很多）
   var fitCache = new Map();
@@ -2232,19 +2252,32 @@
     ctx.drawImage(c, f * cw, 0, cw, c.height, -Wd / 2, -H, Wd, H); ctx.restore();
   }
   function fitStrip(im, hCss) { return fit(im, hCss); }
+  var paintGait = null, paintSquash = 0;
+  // 接触阴影：贴在脚线上、更小更深；身体抬起时变小变淡（另有一层很淡的环境阴影）
+  function contactShadow(x, foot, H, lift, air) {
+    var k = 1 - Math.min(0.35, lift * 3) - (air ? 0.25 : 0), rx = H * 0.30 * k;
+    ctx.drawImage(shadowSprite(), x - rx * 1.6, foot - rx * 0.32, rx * 3.2, rx * 0.64);
+    ctx.globalAlpha = 0.55 * k; ctx.drawImage(shadowSprite(), x - rx * 0.95, foot - rx * 0.17, rx * 1.9, rx * 0.34); ctx.globalAlpha = 1;
+  }
   function paintedCat(x, y, u, view, flip, st, breathe, runCycle, skin, a) {
     var PAINTED = catImgs(skin); if (!PAINTED) return false;
     var back = view === "back" || view === "b34";
     var dir = back ? "back" : view === "side" ? "side" : "front", strip = IMG[skin + "_run_" + dir];
+    loadRun(skin);
     var mode = a ? a.mode : (st[0] === "run" ? "run" : "sit"), gul = st[0] === "gulp", foot = y + 46 * u;
     if (strip && (mode === "run" || mode === "stand" || mode === "sitdown" || paintPounce) && !gul) {
       var H = (dir === "side" ? 92 : 96) * u, f;
       if (paintPounce) f = dir === "side" ? 8 : 3;
-      else if (mode === "run") f = Math.floor(runCycle * 2.4 / (Math.PI * 2) * 8 + 800) % 8;
+      else if (mode === "run") f = paintGait != null ? Math.floor(paintGait * 8 + 800) % 8 : Math.floor(runCycle * 2.4 / (Math.PI * 2) * 8 + 800) % 8;
       else f = 0;
-      var sq = mode === "stand" || mode === "sitdown" ? 0.06 : 0;
-      if (sq) { ctx.save(); ctx.translate(x, foot); ctx.scale(1 + sq * 0.5, 1 - sq); ctx.translate(-x, -foot); }
-      runFrameDraw(strip, RUN_N[dir], f, x, foot + 4 * u, H, dir === "side" ? flip : dir === "front" ? -flip : flip, paintPounce && dir === "side" ? -0.12 * flip : 0);
+      // 钉脚：帧底到最低爪子的空隙下移抵消，最低爪子正好落在地面线；身体起伏只体现在帧内（脚不动、身体动）
+      var fi = FOOT[skin + "_run_" + dir], gap = fi ? fi.gap[f] : 0, lift = fi ? fi.top[f] - Math.min.apply(null, fi.top) : 0;
+      if (paintPounce) gap = Math.max(0, gap - 0.05); // 飞扑帧离地一点
+      contactShadow(x, foot, H, lift, paintPounce);
+      var sq = mode === "stand" || mode === "sitdown" ? 0.05 : 0;
+      if (paintSquash > 0.05) sq = paintSquash * 0.16; // 扑击落地挤压
+      if (sq) { ctx.save(); ctx.translate(x, foot); ctx.scale(1 + sq * 0.6, 1 - sq); ctx.translate(-x, -foot); }
+      runFrameDraw(strip, RUN_N[dir], f, x, foot + gap * H, H, dir === "side" ? flip : dir === "front" ? -flip : flip, paintPounce && dir === "side" ? -0.12 * flip : 0);
       if (sq) ctx.restore();
       return true;
     }
@@ -2252,6 +2285,7 @@
     var H2 = 98 * u, Wd = H2 * im.width / im.height, sx = 1, sy = 1;
     if (gul) { sy = [1, 0.9, 1.08, 0.95, 1][st[1]] || 1; sx = 2 - sy; }
     else { sx = 1 - breathe * 0.5; sy = 1 + breathe; }
+    contactShadow(x, foot, H2 * 0.9, 0, false);
     ctx.save(); ctx.translate(x, foot); ctx.scale(sx, sy);
     ctx.drawImage(fit(im, H2), -Wd / 2, -H2, Wd, H2); ctx.restore();
     return true;
@@ -2261,7 +2295,7 @@
     var key = back ? "back" : (run && (view === "side" || view === "q34")) ? "side" : (run && view === "front") ? "front" : (view === "side" || view === "q34") ? "side" : "front";
     var im = IMG["m_" + t + "_" + key]; if (!im) return false;
     var H = (key === "side" ? 34 : 46) * u, Wd = H * im.width / im.height, bob = 0, sy = 1;
-    if (run) { var ph = runCycle * 3; bob = Math.abs(Math.sin(ph)) * 4 * u; sy = 1 - Math.cos(ph * 2) * 0.05; }
+    if (run) { var ph = runCycle * 3; bob = Math.abs(Math.sin(ph)) * 1.2 * u; sy = 1 - Math.cos(ph * 2) * 0.05; } // v15：只轻微起伏，脚贴地
     ctx.save(); ctx.translate(x, y + 24 * u - bob); ctx.scale((key === "side" ? flip : 1) * (2 - sy), sy);
     ctx.drawImage(fit(im, H), -Wd / 2, -H, Wd, H); ctx.restore(); return true;
   }
@@ -2362,7 +2396,8 @@
     else st = animFrame(a, runCycle, CAT_SIT_SCHED);
     var sitting = st[0] === "sit" && a.mode === "sit";
     var breathe = sitting ? Math.sin((a.t + a.phase) * 2.4) * 0.03 : 0;
-    shadow(x, y + 46 * u, (st[0] === "run" ? 30 : 26) * u);
+    var painted = catImgs(skin);
+    if (!painted) shadow(x, y + 46 * u, (st[0] === "run" ? 30 : 26) * u);
     if (!ghost) drawGulpMouse(x, y, u, view, flip, true);
     if (paintedCat(x, y, u, view, flip, st, breathe, runCycle, skin, a)) { if (!ghost) drawGulpMouse(x, y, u, view, flip, false); return; }
     blit(ANIM.catSprite(skin, view, st[0], st[1], spritePx(u)), x, y, u, flip, 1 - breathe * 0.5, 1 + breathe, 46);
@@ -2373,7 +2408,8 @@
     var sx = worldToScreenX(cat.x), sy = worldToScreenY(cat.y) + s(evoHop()), stc = uniCatStretch();
     if (poopSitting() && !reducedMotion) sx += Math.sin(elapsedPlayTime * 50) * s(1.5);
     if (stc) { ctx.save(); ctx.translate(sx, sy); ctx.rotate(stc.a); ctx.scale(stc.s, 1 / Math.sqrt(stc.s)); ctx.rotate(-stc.a); ctx.translate(-sx, -sy); }
-    paintPounce = !!(uni && uni.lunge); drawCatAt(sx, sy, s(cat.r), catAnim, cat.runCycle, currentSkin); paintPounce = false;
+    paintPounce = !!(uni && uni.lunge); paintGait = cat.gait || 0; paintSquash = reducedMotion ? 0 : cat.squash;
+    drawCatAt(sx, sy, s(cat.r), catAnim, cat.runCycle, currentSkin); paintPounce = false; paintGait = null; paintSquash = 0;
     drawHat(sx, sy, s(cat.r), catAnim);
     if (stc) ctx.restore();
   }
@@ -2440,7 +2476,7 @@
     vis.sort(function (a, b) { return a.sy - b.sy; });
     drawStats.drawn = vis.length; drawStats.full = 0;
     if (!dbgDraw.noShadow) { // 阴影合并成一次 fill
-      for (var q = 0; q < vis.length; q++) { var vm = vis[q].m, uu = s(vm.r) * MOUSE_UNIT_PER_R, rx = (vm.anim && vm.anim.mode === "run" ? 20 : 16) * uu; shadow(vis[q].sx, vis[q].sy + 24 * uu, rx); }
+      for (var q = 0; q < vis.length; q++) { var vm = vis[q].m, uu = s(vm.r) * MOUSE_UNIT_PER_R, rx = (vm.anim && vm.anim.mode === "run" ? 15 : 13) * uu; ctx.drawImage(shadowSprite(), vis[q].sx - rx * 1.5, vis[q].sy + 24 * uu - rx * 0.3, rx * 3, rx * 0.6); }
     }
     var cut20 = Infinity; if (vis.length > 20) { var d20 = vis.map(function (v) { return v.d; }).sort(function (a, b) { return a - b; }); cut20 = d20[19]; }
     for (var k = 0; k < vis.length; k++) {
