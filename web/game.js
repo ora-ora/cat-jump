@@ -132,7 +132,7 @@
   function lsSetBool(k, v) { try { localStorage.setItem(k, v ? "1" : "0"); } catch (e) {} }
   var prefersRM = !!(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
   var shakeOn = lsBool("catmouse_shake", true), reducedMotion = lsBool("catmouse_reduce_motion", prefersRM);
-  var joystickOn = lsBool("catmouse_joystick", false), cbMode = lsBool("catmouse_cb", false);
+  var joystickOn = false, cbMode = lsBool("catmouse_cb", false);
   var shakeT = 0, shakeAmp = 0;
   function feedback(kind) { // 冲刺/飞扑落地的轻微屏幕抖动 + 手机震动
     if (!shakeOn || reducedMotion) return;
@@ -406,9 +406,9 @@
 
   var camLook = { x: 0, y: 0 };
   function updateCamera(dt) {
-    var smoothing = 1 - Math.exp(-dt * 6);
+    var smoothing = 1 - Math.exp(-dt * 9);
     // v13 A8：镜头前瞻——朝移动方向多看一点（关掉"减少动效"时生效）
-    var la = reducedMotion ? 0 : 55 * entityScaleMult; camLook.x += ((moveDir.x || 0) * la - camLook.x) * (1 - Math.exp(-dt * 2.2)); camLook.y += ((moveDir.y || 0) * la - camLook.y) * (1 - Math.exp(-dt * 2.2));
+    var la = reducedMotion ? 0 : 80 * entityScaleMult, pk = 0, pux = 0, puy = 0; if (!reducedMotion && uni && uni.lunge) { pk = 10; pux = uni.lunge.ux; puy = uni.lunge.uy; } else if (!reducedMotion && sig && sig.go) { pk = 10; pux = sig.ux; puy = sig.uy; } camLook.x += ((moveDir.x || 0) * la + pux * pk - camLook.x) * (1 - Math.exp(-dt * 3.5)); camLook.y += ((moveDir.y || 0) * la + puy * pk - camLook.y) * (1 - Math.exp(-dt * 3.5));
     camera.x += (cat.x + camLook.x - camera.x) * smoothing;
     camera.y += (cat.y + camLook.y - camera.y) * smoothing;
     clampCamera();
@@ -447,52 +447,99 @@
     moveDir.x = n.x; moveDir.y = n.y;
   }
 
-  // 虚拟摇杆：按下处为圆心，拖动方向即移动方向（可在暂停面板开启）
-  var joy = null;
-  function joyDir(px, py) {
-    var dx = px - joy.x, dy = py - joy.y, d = Math.sqrt(dx * dx + dy * dy);
-    joy.kx = d > 50 ? joy.x + dx / d * 50 : px; joy.ky = d > 50 ? joy.y + dy / d * 50 : py;
-    if (d < 10) return null; return { x: dx / d, y: dy / d };
+  // v19 TAP3：纯手势。按住/拖动=跟手指；轻点老鼠=锁定+自动追+招牌扑；轻点空地=跑过去（插小旗）；两指轻点=暂停
+  var joy = null; // 摇杆已移除（保留变量供旧代码判断）
+  function drawJoystick() {}
+  var TAP_MS = 150, TAP_PX = 12, ptrs = new Map(), multi = null;
+  var tap = null, lock = null, flag = null, lockFx = [];
+  function nowMs() { return performance.now(); }
+  function pickMouseAt(px, py) {
+    var best = null, bd = 36 * 36;
+    for (var i = 0; i < mice.length; i++) { var m = mice[i]; if (!uniOk(m)) continue;
+      var sx = worldToScreenX(m.x + (m.vx || 0) * 0.1), sy = worldToScreenY(m.y + (m.vy || 0) * 0.1) - s(6), dx = sx - px, dy = sy - py, d = dx * dx + dy * dy;
+      if (d < bd) { bd = d; best = m; } }
+    return best;
   }
-  function drawJoystick() {
-    if (!joy) return;
-    ctx.globalAlpha = 0.35; ctx.fillStyle = "#fff"; ctx.beginPath(); ctx.arc(joy.x, joy.y, 50, 0, 7); ctx.fill();
-    ctx.globalAlpha = 0.7; ctx.fillStyle = "#ff9d4d"; ctx.beginPath(); ctx.arc(joy.kx, joy.ky, 22, 0, 7); ctx.fill(); ctx.globalAlpha = 1;
+  function screenToWorld(px, py) { return { x: (px - W / 2) / SCALE + camera.x, y: (py - H / 2) / SCALE + camera.y }; }
+  function clearTargets() { lock = null; flag = null; }
+  function setLock(m) {
+    lock = { m: m, seed: m.seed, t: 0, best: 1e9, prog: 0, born: elapsedPlayTime }; flag = null;
+    if (CA.sfx.uni) CA.sfx.uni("chain", 0); buzz(10);
   }
+  function buzz(ms) { if (!shakeOn || reducedMotion) return; try { if (navigator.vibrate) navigator.vibrate(ms); } catch (e) {} }
   function onPointerDown(e) {
     ensureAudio();
     if (state !== STATE_PLAY) return;
+    ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (ptrs.size >= 2) { // 两指：只用来暂停，不移动
+      if (!multi) multi = { t0: nowMs(), moved: false, pts: {} };
+      ptrs.forEach(function (p, id) { multi.pts[id] = { x: p.x, y: p.y }; });
+      activePointerId = null; tap = null; moveDir.x = 0; moveDir.y = 0; lastPtr = null;
+      return;
+    }
     if (activePointerId !== null) return;
     activePointerId = e.pointerId;
-    uniCancel();
-    if (dom && dom.hud) dom.hud.classList.add("steering"); // 拖动中手指划过右上角按钮不会误触
-    if (joystickOn) { joy = { x: e.clientX, y: e.clientY, kx: e.clientX, ky: e.clientY }; return; }
-    var dir = computeDirFromPoint(e.clientX, e.clientY);
-    if (dir) { moveDir.x = dir.x; moveDir.y = dir.y; }
+    tap = { x0: e.clientX, y0: e.clientY, t0: nowMs(), drag: false };
+    if (dom && dom.hud) dom.hud.classList.add("steering");
+    var dir = computeDirFromPoint(e.clientX, e.clientY); // 降延迟：按下当帧就朝手指起步
+    if (dir && !(sig && sig.go)) { moveDir.x = dir.x; moveDir.y = dir.y; }
   }
-
+  function toDrag() { if (!tap || tap.drag) return; tap.drag = true; clearTargets(); }
   function onPointerMove(e) {
-    if (e.pointerId !== activePointerId) return;
-    var dir = joy ? joyDir(e.clientX, e.clientY) : computeDirFromPoint(e.clientX, e.clientY);
-    if (dir) { if (joy && (dir.x * moveDir.x + dir.y * moveDir.y) < 0.9) uniCancel(); moveDir.x = dir.x; moveDir.y = dir.y; }
-    else if (joy) { moveDir.x = 0; moveDir.y = 0; }
+    if (ptrs.has(e.pointerId)) ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (multi && multi.pts[e.pointerId]) { var p0 = multi.pts[e.pointerId]; if (Math.abs(e.clientX - p0.x) + Math.abs(e.clientY - p0.y) > 30) multi.moved = true; }
+    if (e.pointerId !== activePointerId || !tap) return;
+    var ev = e; if (e.getCoalescedEvents) { var ce = e.getCoalescedEvents(); if (ce && ce.length) ev = ce[ce.length - 1]; }
+    var dx = ev.clientX - tap.x0, dy = ev.clientY - tap.y0;
+    if (!tap.drag && (dx * dx + dy * dy >= TAP_PX * TAP_PX || nowMs() - tap.t0 > TAP_MS)) toDrag();
+    var dir = computeDirFromPoint(ev.clientX, ev.clientY);
+    if (tap.drag) { if (dir) { moveDir.x = dir.x; moveDir.y = dir.y; } else { moveDir.x = 0; moveDir.y = 0; } }
   }
-
   function onPointerUp(e) {
+    ptrs.delete(e.pointerId);
+    if (multi) {
+      if (ptrs.size === 0) { var quick = nowMs() - multi.t0 < 400 && !multi.moved; multi = null; if (quick && state === STATE_PLAY) enterPause(); }
+      if (e.pointerId === activePointerId) activePointerId = null;
+      return;
+    }
     if (e.pointerId !== activePointerId) return;
-    activePointerId = null; joy = null; lastPtr = null;
+    activePointerId = null; lastPtr = null;
     if (dom && dom.hud) dom.hud.classList.remove("steering");
-    moveDir.x = 0; moveDir.y = 0;
+    var t = tap; tap = null; moveDir.x = 0; moveDir.y = 0;
+    if (t && !t.drag && e.type === "pointerup" && state === STATE_PLAY) {
+      var m = pickMouseAt(e.clientX, e.clientY);
+      if (m) setLock(m);
+      else { var w = screenToWorld(e.clientX, e.clientY); flag = { x: w.x, y: w.y, t: 0, best: 1e9, prog: 0 }; lock = null; }
+    }
     syncKeyDir();
+  }
+  // 每帧：按住超过 150ms → 拖动；锁定/小旗 → 自动追
+  function tapSteer(dt) {
+    if (tap && !tap.drag && activePointerId !== null && nowMs() - tap.t0 > TAP_MS) toDrag();
+    if (activePointerId !== null && tap && tap.drag) return;
+    if (lock) {
+      var m = lock.m, ok = mice.indexOf(m) >= 0 && m.seed === lock.seed && uniOk(m);
+      lock.t += dt;
+      if (ok) { var d = distance(cat.x, cat.y, m.x, m.y); if (d < lock.best - 4) { lock.best = d; lock.prog = 0; } else lock.prog += dt;
+        if (d > 450 * entityScaleMult || lock.t > 6 || lock.prog > 2) { lockFx.push({ x: m.x, y: m.y, age: 0, kind: "x" }); ok = false; } }
+      if (!ok) { lock = null; if (activePointerId === null) { moveDir.x = 0; moveDir.y = 0; syncKeyDir(); } }
+      else if (!(sig && sig.go)) { var n = normalize(m.x + (m.vx || 0) * 0.15 - cat.x, m.y + (m.vy || 0) * 0.15 - cat.y); moveDir.x = n.x; moveDir.y = n.y; }
+    } else if (flag) {
+      flag.t += dt; var fd = distance(cat.x, cat.y, flag.x, flag.y);
+      if (fd < flag.best - 3) { flag.best = fd; flag.prog = 0; } else flag.prog += dt;
+      if (fd < 12 || flag.t > 8 || flag.prog > 1.2) { flag = null; moveDir.x = 0; moveDir.y = 0; syncKeyDir(); }
+      else { var fn = normalize(flag.x - cat.x, flag.y - cat.y); moveDir.x = fn.x; moveDir.y = fn.y; }
+    }
   }
 
   canvas.addEventListener("pointerdown", onPointerDown);
   window.addEventListener("pointermove", onPointerMove);
   window.addEventListener("pointerup", onPointerUp);
   window.addEventListener("pointercancel", onPointerUp);
-  window.addEventListener("pointerleave", onPointerUp);
+  window.addEventListener("blur", function () { if (state === STATE_PLAY) enterPause(); });
 
   window.addEventListener("keydown", function (e) {
+    if (/^(Arrow|[wasdWASD]$)/.test(e.key)) clearTargets();
     if (!keysDown[e.key]) uniCancel();
     keysDown[e.key] = true;
     syncKeyDir();
@@ -508,10 +555,14 @@
 
   function updateCat(dt) {
     cat.r = CAT_RADIUS * entityScaleMult;
+    tapSteer(dt);
     var spdMul = uniSpeedMul();
     var targetVx = moveDir.x * MOVE_SPEED * spdMul;
     var targetVy = moveDir.y * MOVE_SPEED * spdMul;
-    var smoothing = 1 - Math.exp(-dt * 14);
+    if (sig) { targetVx = 0; targetVy = 0; }
+    // v19 手感：加速/转向更快；反向时先急停
+    if (targetVx * cat.vx + targetVy * cat.vy < -0.3 * MOVE_SPEED * MOVE_SPEED) { cat.vx *= 0.25; cat.vy *= 0.25; }
+    var smoothing = 1 - Math.exp(-dt * (sig ? 40 : 24));
     cat.vx += (targetVx - cat.vx) * smoothing;
     cat.vy += (targetVy - cat.vy) * smoothing;
 
@@ -574,11 +625,12 @@
 
     if (activePointerId !== null && !joy && lastPtr) { var pd = computeDirFromPoint(lastPtr.x, lastPtr.y); if (pd) { moveDir.x = pd.x; moveDir.y = pd.y; } else { moveDir.x = 0; moveDir.y = 0; } }
     uniLungeStep(dt);
+    sigStep(dt);
     var speed = Math.sqrt(cat.vx * cat.vx + cat.vy * cat.vy);
     if (speed > 4) cat.facing = Math.atan2(cat.vy, cat.vx);
     cat.runCycle += dt * (speed / 24 + 0.3);
     // v15 步幅同步：步态相位按实际移动距离推进（一个完整步态周期 ≈ 1.15 个身长），落脚不打滑
-    var g0 = cat.gait || 0; cat.gait = g0 + speed * dt / (115 * cat.r * CAT_UNIT_PER_R );
+    var g0 = cat.gait || 0; cat.gait = g0 + speed * dt * 1.1 / (115 * cat.r * CAT_UNIT_PER_R );
     if (speed > 150 && !reducedMotion && Math.floor(g0 * 2) !== Math.floor(cat.gait * 2)) spawnDust(cat.x - Math.cos(cat.facing) * cat.r * 0.5, cat.y + cat.r * 46 * CAT_UNIT_PER_R, cat.facing, 5 + Math.random() * 3);
     cat.squash = Math.max(0, cat.squash - dt * 4);
   }
@@ -621,7 +673,7 @@
   }
 
   function resetScoring() {
-    uniReset(); score = 0; catches = 0; catchesGrey = 0; catchesBrown = 0; catchesGold = 0; missionsInit();
+    uniReset(); sigReset(); clearTargets(); score = 0; catches = 0; catchesGrey = 0; catchesBrown = 0; catchesGold = 0; missionsInit();
     combo = 0; comboTimer = 0; comboMax = 0; elapsedPlayTime = 0; hitStopT = 0; hitStopCd = 0; impacts.length = 0; flyers.length = 0; comboBanner = null; comboRings.length = 0;
   }
 
@@ -815,7 +867,7 @@
       stepMouse(m, sdt, dToCat, i);
       if (m.under) continue;
       var dAfter = distance(m.x, m.y, cat.x, cat.y);
-      if (dAfter < cat.r + m.r) { onCapture(m); recycleMouse(i); }
+      if (dAfter < cat.r + m.r + sigCatchBonus() && !(sig && sig.hide)) { onCapture(m); recycleMouse(i); }
     }
   }
 
@@ -963,6 +1015,7 @@
     score += gained;
     catches += 1;
     uniOnCapture(m);
+    sigOnCapture(m);
     if (m.type === "grey") catchesGrey++;
     else if (m.type === "brown") catchesBrown++;
     else catchesGold++;
@@ -1813,7 +1866,7 @@
   var COMBO_TIERS = [5, 10, 20, 30, 50];
   function juiceCapture(m, gained) {
     var gold = m.type === "gold", now = elapsedPlayTime;
-    if (!reducedMotion && now >= hitStopCd) { hitStopT = gold ? 0.07 : 0.035; hitStopCd = now + 0.22; }
+    if (!reducedMotion && now >= hitStopCd) { hitStopT = gold ? 0.07 : 0.045; hitStopCd = now + 0.22; }
     if (impacts.length > 10) impacts.shift();
     impacts.push({ x: m.x, y: m.y, age: 0, life: gold ? 0.45 : 0.3, gold: gold, rot: Math.random() * 6 });
     if (flyers.length < 12) flyers.push({ sx: worldToScreenX(m.x), sy: worldToScreenY(m.y), age: 0, life: 0.55, gold: gold, amt: gained });
@@ -2461,10 +2514,11 @@
   }
 
   function drawCat() {
-    var sx = worldToScreenX(cat.x), sy = worldToScreenY(cat.y) + s(evoHop()), stc = uniCatStretch();
+    if (sig && sig.hide) return;
+    var sx = worldToScreenX(cat.x), sy = worldToScreenY(cat.y) + s(evoHop()) - s(sig ? sig.z || 0 : 0), stc = sigCatStretch() || uniCatStretch();
     if (poopSitting() && !reducedMotion) sx += Math.sin(elapsedPlayTime * 50) * s(1.5);
     if (stc) { ctx.save(); ctx.translate(sx, sy); ctx.rotate(stc.a); ctx.scale(stc.s, 1 / Math.sqrt(stc.s)); ctx.rotate(-stc.a); ctx.translate(-sx, -sy); }
-    paintPounce = !!(uni && uni.lunge); paintGait = cat.gait || 0; paintSquash = reducedMotion ? 0 : cat.squash;
+    paintPounce = !!(uni && uni.lunge) || !!(sig && sig.go); paintGait = cat.gait || 0; paintSquash = reducedMotion ? 0 : cat.squash;
     drawCatAt(sx, sy, s(cat.r), catAnim, cat.runCycle, currentSkin); paintPounce = false; paintGait = null; paintSquash = 0;
     drawHat(sx, sy, s(cat.r), catAnim);
     if (stc) ctx.restore();
@@ -2546,7 +2600,7 @@
       var ox = 0;
       if (m.cornerT > 0 || m.trem > 0 || (m.beh === "timid" && m.state === "flee" && v.full)) ox = Math.sin(elapsedPlayTime * 60) * 2 * u;
       if (m.asleep) st = ["sit", 2];
-      if (dayNow.night > 0.5 && mouseInDark(m)) { var ea = 0.5 + 0.5 * dayNow.night; var blk = Math.sin(elapsedPlayTime * 2.3 + m.seed * 11) > 0.96; if (!blk) { var gw = glowSprite(), gs = s(9); ctx.globalAlpha = resScale < 1 ? 0 : ea; ctx.drawImage(gw, sx - 5 * u - gs / 2, sy - 8 * u - gs / 2, gs, gs); ctx.drawImage(gw, sx + 5 * u - gs / 2, sy - 8 * u - gs / 2, gs, gs); ctx.globalAlpha = 1; ctx.fillStyle = "#fff8c0"; ctx.beginPath(); ctx.arc(sx - 5 * u, sy - 8 * u, s(1.6), 0, 7); ctx.arc(sx + 5 * u, sy - 8 * u, s(1.6), 0, 7); ctx.fill(); } continue; }
+      if (dayNow.night > 0.5 && mouseInDark(m)) { var ea = 0.5 + 0.5 * dayNow.night; var blk = Math.sin(elapsedPlayTime * 2.3 + m.seed * 11) > 0.96; if (!blk) { var gw = glowSprite(), gs = s(9); if (resScale >= 1) { ctx.globalAlpha = ea; ctx.drawImage(gw, sx - 5 * u - gs / 2, sy - 8 * u - gs / 2, gs, gs); ctx.drawImage(gw, sx + 5 * u - gs / 2, sy - 8 * u - gs / 2, gs, gs); ctx.globalAlpha = 1; } ctx.fillStyle = "#fff8c0"; ctx.beginPath(); ctx.arc(sx - 5 * u, sy - 8 * u, s(1.6), 0, 7); ctx.arc(sx + 5 * u, sy - 8 * u, s(1.6), 0, 7); ctx.fill(); } continue; }
       if (!dbgDraw.noSprite && !paintedMouse(m.type, sx + ox, sy, u, d[0], d[1], st, m.runCycle)) blit(ANIM.mouseSprite(m.type, d[0], st[0], st[1], spritePx(u)), sx + ox, sy, u, d[1]);
       if (!dbgDraw.noTell && (v.full || m.type === "gold" || m.packId)) drawTell(m, sx + ox, sy, u, st, v.full, v.i);
     }
@@ -3164,7 +3218,7 @@
     var nickname = enforceNicknameNotOffensive(dom.nicknameInput, dom.nicknameHint).trim();
     storageSet("catmouse_nickname", nickname);
     hideScreen(dom.startScreen);
-    showScreen(dom.hud); var mm = document.getElementById("miniMap"); if (mm) mm.classList.remove("hidden");
+    showScreen(dom.hud);
     resetWorld();
     resetScoring();
     resetAbilities();
@@ -3343,7 +3397,6 @@
     var q = function (id) { return document.getElementById(id); };
     [["shakeOn", "catmouse_shake", function (v) { shakeOn = v; if (v) feedback("land"); }],
      ["reduceMotion", "catmouse_reduce_motion", function (v) { reducedMotion = v; document.body.classList.toggle("reduce-motion", v); }],
-     ["joystickOn", "catmouse_joystick", function (v) { joystickOn = v; }],
      ["cbMode", "catmouse_cb", function (v) { cbMode = v; }]].forEach(function (c) {
       var el = q(c[0]); if (!el) return;
       el.checked = { shakeOn: shakeOn, reduceMotion: reducedMotion, joystickOn: joystickOn, cbMode: cbMode }[c[0]];
@@ -3353,13 +3406,11 @@
   })();
   // ---- 首局新手引导（只出现一次）：开始第一局前 3 步说明 ----
   var ONBOARD_STEPS = [
-    ["👆", "按住屏幕边缘，小猫就朝那个方向跑", "手指在哪边，小猫往哪边跑；松手就停下。也可以在暂停面板开启「虚拟摇杆」。桌面端用方向键 / WASD。"],
-    ["🐾", "靠近老鼠会自动飞扑", "老鼠只从老鼠窝 🕳️ 里出来（屏幕边缘箭头指路，夜晚出得更多）。靠近老鼠会自动飞扑；蹲在窝上不动 3 秒会便便 💩，把窝摧毁！"],
-    ["⭐", "点左上角 Lv 徽章看技能", "每只猫有专属招牌技能，抓 15/40/80/150 只进化。点徽章会暂停并显示全部技能说明。"]
+    ["👆", "全靠手势，屏幕上没有按钮", "✋ 按住拖动：小猫跟着手指跑\n🐭 轻点老鼠：锁定，自动追上去放招牌扑\n🚩 轻点空地：跑到那里\n✌️ 两指轻点：暂停（切后台自动暂停）\n屏外老鼠看屏幕边缘的小箭头。"]
   ];
   function maybeOnboard(next) {
     var el = document.getElementById("onboardScreen");
-    if (!el || lsBool("catmouse_onboard_done", false)) { next(); return; }
+    if (!el || lsBool("catmouse_onboard3_done", false)) { next(); return; }
     var i = 0;
     function render() {
       var st = ONBOARD_STEPS[i];
@@ -3367,7 +3418,7 @@
       el.querySelector(".ob-dots").textContent = ONBOARD_STEPS.map(function (_, k) { return k === i ? "●" : "○"; }).join(" ");
       el.querySelector("#onboardNext").textContent = i < ONBOARD_STEPS.length - 1 ? "下一步" : "开始抓老鼠 🐾";
     }
-    function done() { lsSetBool("catmouse_onboard_done", true); hideScreen(el); next(); }
+    function done() { lsSetBool("catmouse_onboard3_done", true); hideScreen(el); next(); }
     el.querySelector("#onboardNext").onclick = function () { sfx.click(); if (++i >= ONBOARD_STEPS.length) done(); else render(); };
     el.querySelector("#onboardSkip").onclick = function () { sfx.click(); done(); };
     render(); showScreen(el); el.querySelector("#onboardNext").focus();
@@ -3408,6 +3459,13 @@
   dom.showLeaderboardBtnResult.addEventListener("click", openLeaderboard);
   dom.leaderboardCloseBtn.addEventListener("click", closeLeaderboard);
   dom.hudLbBtn.addEventListener("click", openInGameLeaderboard);
+  // v19：排行榜/技能/全图/声音 只在暂停菜单
+  function fromPause(fn) { return function () { sfx.click(); if (state !== STATE_PAUSE) return; hideScreen(dom.pauseScreen); state = STATE_PLAY; fn(); }; }
+  (function () {
+    var b1 = document.getElementById("pauseLbBtn"), b2 = document.getElementById("pauseAbBtn"), b3 = document.getElementById("pauseMapBtn"), b4 = document.getElementById("pauseMuteBtn");
+    if (b1) b1.onclick = fromPause(openInGameLeaderboard); if (b2) b2.onclick = fromPause(openAbilityPanel); if (b3) b3.onclick = fromPause(openMap);
+    if (b4) { var upd = function () { b4.textContent = muted ? "🔇 已静音" : "🔊 声音"; }; b4.onclick = function () { ensureAudio(); toggleMute(); upd(); }; upd(); }
+  })();
   // 按钮上的按下事件不传给画布，避免误移动小猫
   ["pointerdown", "touchstart", "mousedown"].forEach(function (ev) {
     dom.hudLbBtn.addEventListener(ev, function (e) { e.stopPropagation(); }, { passive: true });
@@ -3418,7 +3476,7 @@
   // =======================================================================
 
   function updateHud() {
-    setText(dom.scoreText, score);
+    setText(dom.scoreText, "🐭 " + catches);
     if (ab) { toggleCls(dom.abilityBadge, "flash", ab.flash > 0); updateSkillBadge(false); }
     if (combo >= 2) {
       dom.comboText.classList.remove("hidden");
@@ -3770,6 +3828,19 @@
       emojiQuick("🕳️", ax - Math.cos(a) * 24, ay - Math.sin(a) * 24, 16, al);
     }
   }
+  // v19：屏外老鼠边缘箭头（最多 3 个，越远越淡；小地图已移除）
+  function drawMouseArrows() {
+    var list = [], hw = W / 2, hh = H / 2, i;
+    for (i = 0; i < mice.length; i++) { var m = mice[i]; if (!uniOk(m)) continue; var sx = worldToScreenX(m.x), sy = worldToScreenY(m.y);
+      if (sx > -10 && sx < W + 10 && sy > -10 && sy < H + 10) continue; var d = distance(m.x, m.y, cat.x, cat.y); if (d > 900) continue; list.push({ m: m, d: d, sx: sx, sy: sy }); }
+    list.sort(function (a, b) { return a.d - b.d; });
+    for (i = 0; i < Math.min(3, list.length); i++) {
+      var L = list[i], a = Math.atan2(L.sy - hh, L.sx - hw), mg = 18, kx = (hw - mg) / Math.abs(Math.cos(a) || 1e-6), ky = (hh - mg - 30) / Math.abs(Math.sin(a) || 1e-6), kk = Math.min(kx, ky);
+      var ax = hw + Math.cos(a) * kk, ay = hh + Math.sin(a) * kk, al = clamp(1.1 - L.d / 900, 0.3, 0.95);
+      ctx.save(); ctx.globalAlpha = al; ctx.translate(ax, ay); ctx.rotate(a); ctx.fillStyle = L.m.type === "gold" ? "#ffd23f" : "#ffffff"; ctx.strokeStyle = "rgba(60,40,30,.7)"; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(9, 0); ctx.lineTo(-6, -7); ctx.lineTo(-6, 7); ctx.closePath(); ctx.fill(); ctx.stroke(); ctx.restore();
+    }
+  }
   // ---- 小地图 ----
   var miniT = 0;
   var miniBase = null;
@@ -3841,7 +3912,7 @@
   function uniStartLunge(m, chain) {
     var esm = entityScaleMult, dx = m.x - cat.x, dy = m.y - cat.y, d = Math.sqrt(dx * dx + dy * dy) || 1;
     var len = Math.min(80 * esm, d + 4), ux = dx / d, uy = dy / d;
-    uni.lunge = { sx: cat.x, sy: cat.y, ux: ux, uy: uy, len: len, t: 0, dur: 0.25, hit: false, chain: chain, done: 0 };
+    uni.lunge = { sx: cat.x, sy: cat.y, ux: ux, uy: uy, len: len, t: 0, dur: 0.21, wind: chain ? 0 : 0.05, hit: false, chain: chain, done: 0 };
     if (chain) { uni.chainN++; uni.stats.chain++; if (uni.chainN + 1 > uni.stats.maxChain) uni.stats.maxChain = uni.chainN + 1; }
     else { uni.chainN = 0; uni.stats.pounce++; }
     if (CA.sfx.uni) CA.sfx.uni(chain ? "chain" : "pounce", uni.chainN);
@@ -3850,7 +3921,7 @@
   // 在 updateCat 末尾调用：飞扑位移（沿玩家方向扇形内，带障碍碰撞）
   function uniLungeStep(dt) {
     var L = uni.lunge; if (!L) return;
-    var prev = L.done; L.t += dt; var k = Math.min(1, L.t / L.dur), e = 1 - (1 - k) * (1 - k);
+    var prev = L.done; L.t += dt; var w0 = L.wind || 0; if (L.t < w0) return; var k = Math.min(1, (L.t - w0) / (L.dur - w0)), e = 1 - (1 - k) * (1 - k);
     var step = L.len * e - prev; L.done = L.len * e;
     cat.x += L.ux * step; cat.y += L.uy * step;
     var obs = queryNearbyObstacles(cat.x, cat.y); for (var i = 0; i < obs.length; i++) resolveCircleAabb(cat, obs[i]); if (TERR) TERR.push(cat);
@@ -3866,7 +3937,7 @@
     if (moving && uni.lastDx * moveDir.x + uni.lastDy * moveDir.y > 0.995) uni.straightT += dt;
     else { if (uni.dashT > 0) uniCancel(); uni.straightT = 0; }
     uni.lastDx = moveDir.x; uni.lastDy = moveDir.y;
-    if (!moving) { uni.lunge = null; uni.chainLeft = 0; uni.chainWin = 0; }
+    if (!moving && !(uni.lunge && uni.lunge.keep)) { uni.lunge = null; uni.chainLeft = 0; uni.chainWin = 0; }
     if (uni.dashT > 0) { uni.dashT -= dt; if (uni.dashT <= 0) uni.dashMul = 1; if (!reducedMotion && Math.random() < 0.5) uni.ghosts.push({ x: cat.x, y: cat.y, a: 0.2, line: true, ang: Math.atan2(moveDir.y, moveDir.x), off: (Math.random() - 0.5) * 30 }); }
     else if (moving && uni.straightT >= 1 && uniFind(150 * esm, Math.PI / 6)) {
       uni.dashMul = [1.3, 1.35, 1.4, 1.45, 1.5][st - 1]; uni.dashT = [1.0, 1.2, 1.5, 1.8, 2.2][st - 1]; uni.stats.dash++;
@@ -3888,7 +3959,7 @@
         uni.chainWin = uni.chainLeft > 0 ? 0.4 : 0;
       } else { uni.chainLeft = 0; uni.chainWin = 0; }
     }
-    if (!uni.lunge && moving && !poopSitting()) {
+    if (!uni.lunge && moving && !poopSitting() && !sig) {
       if (uni.chainWin > 0) {
         uni.chainWin -= dt;
         var cm = uniFind(80 * esm, Math.PI / 2);
@@ -3945,6 +4016,167 @@
     return null;
   }
 
+  // =======================================================================
+  // v19 TAP2 爽快版：锁定目标后放「招牌扑」。最后一口仍由猫身体碰到才算抓（范围效果只冻住/拉近）
+  // =======================================================================
+  var SIG_BASE = {
+    orange: { name: "弹簧大跳", R: 140, half: 45, cd: 1.6, max: 2 },
+    black: { name: "影子闪现", R: 180, half: 180, cd: 3.0, max: 1 },
+    white: { name: "雪球肚压", R: 90, half: 60, cd: 2.5, max: 1 },
+    calico: { name: "毛线钩", R: 220, half: 30, cd: 2.0, max: 1 },
+    blue: { name: "滚滚碾压", R: 160, half: 20, cd: 2.2, max: 3 },
+    siamese: { name: "高音连扑", R: 100, half: 60, cd: 1.8, max: 3 }
+  };
+  var SIG_COL = { orange: "#ff8a2a", black: "#8a5cff", white: "#6cc8ff", calico: "#ff6fa8", blue: "#5b8cff", siamese: "#3fa9ff" };
+  var sig = null, sigCd = 0, sigFx = [], sigFlash = 0, sigCount = { fired: 0, caught: 0 };
+  function sigParams() {
+    var b = SIG_BASE[currentSkin] || SIG_BASE.orange, st = uniStage(), esm = entityScaleMult;
+    var p = { kind: currentSkin, R: b.R * (st >= 2 ? 1.1 : 1) * esm, half: b.half * Math.PI / 180, cd: b.cd * (st >= 3 ? 0.85 : 1), max: b.max };
+    if (st >= 4) { if (currentSkin === "black" || currentSkin === "calico") p.cd *= 0.85; else p.max += 1; }
+    p.lv5 = st >= 5; return p;
+  }
+  function sigReset() { sig = null; sigCd = 0; sigFx.length = 0; sigFlash = 0; sigCount = { fired: 0, caught: 0 }; }
+  function terrLineClear(x0, y0, x1, y1) {
+    if (!TERR) return true; var d = distance(x0, y0, x1, y1), n = Math.ceil(d / 18);
+    for (var i = 1; i <= n; i++) { var k = i / n; if (TERR.blocked(x0 + (x1 - x0) * k, y0 + (y1 - y0) * k, 0)) return false; } return true;
+  }
+  function sigFxAdd(o) { if (o.opt && resScale < 1 && (dayNow.night > 0.5 || Math.random() < 0.5)) return; /* v19：弱设备夜晚去掉额外特效 */ o.age = 0; sigFx.push(o); }
+  function sigStart(m, p) {
+    var dx = m.x - cat.x, dy = m.y - cat.y, d = Math.sqrt(dx * dx + dy * dy) || 1;
+    sig = { kind: p.kind, p: p, m: m, seed: m.seed, ph: "wind", t: 0, wind: 0.1, ux: dx / d, uy: dy / d, caught: 0, hitStopped: false, go: false, hide: false, z: 0, n: 0 };
+    sigCd = p.cd; uniCancel(); sigCount.fired++;
+    if (CA.sfx.uni) CA.sfx.uni("pounce", 0); buzz(12);
+  }
+  function sigGo() {
+    var S = sig, m = S.m, p = S.p, esm = entityScaleMult; S.ph = "go"; S.t = 0; S.go = true;
+    var tx = m.x + (m.vx || 0) * 0.12, ty = m.y + (m.vy || 0) * 0.12, dx = tx - cat.x, dy = ty - cat.y, d = Math.sqrt(dx * dx + dy * dy) || 1;
+    S.ux = dx / d; S.uy = dy / d; S.sx = cat.x; S.sy = cat.y;
+    if (S.kind === "orange") { S.dur = 0.3; S.len = Math.min(p.R + 20 * esm, d); }
+    else if (S.kind === "black") {
+      var bx = m.x - S.ux * cat.r * 0.6, by = m.y - S.uy * cat.r * 0.6;
+      S.dur = 0.08; S.bx = bx; S.by = by; S.hide = true;
+      sigFxAdd({ type: "smoke", x: cat.x, y: cat.y }); sigFxAdd({ type: "eye", x: cat.x, y: cat.y, x2: bx, y2: by });
+    }
+    else if (S.kind === "white") { S.dur = 0.16; S.len = Math.min(p.R + 10 * esm, d + 6); }
+    else if (S.kind === "calico") { S.dur = 0.25; S.gold = m.type === "gold"; S.len = d; S.mx0 = m.x; S.my0 = m.y; if (CA.sfx.uni) CA.sfx.uni("dash"); }
+    else if (S.kind === "blue") { S.dur = 0.35; S.len = Math.min(p.R, d + 60 * esm); if (CA.sfx.uni) CA.sfx.uni("dash"); }
+    else { S.dur = 0.12; S.len = d + 4; }
+    S.done = 0;
+  }
+  function sigCanFire(m, p) {
+    var dx = m.x - cat.x, dy = m.y - cat.y, d = Math.sqrt(dx * dx + dy * dy); if (d > p.R || d < 1) return false;
+    if (p.half < Math.PI) { var fx0 = Math.cos(cat.facing), fy0 = Math.sin(cat.facing); if ((dx * fx0 + dy * fy0) / d < Math.cos(p.half)) return false; }
+    if (p.kind === "black") { var bx = m.x - dx / d * cat.r * 0.6, by = m.y - dy / d * cat.r * 0.6; if (!terrLineClear(cat.x, cat.y, bx, by) || (TERR && TERR.blocked(bx, by, cat.r * 0.8))) return false; }
+    if (p.kind === "calico" || p.kind === "blue") { if (!terrLineClear(cat.x, cat.y, m.x, m.y)) return false; }
+    return true;
+  }
+  function sigUpdate(dt) {
+    sigCd = Math.max(0, sigCd - dt); if (sigFlash > 0) sigFlash -= dt;
+    for (var i = sigFx.length - 1; i >= 0; i--) { sigFx[i].age += dt; if (sigFx[i].age > (sigFx[i].life || 0.5)) sigFx.splice(i, 1); }
+    if (sigFx.length > 60) sigFx.splice(0, sigFx.length - 60);
+    for (i = lockFx.length - 1; i >= 0; i--) { lockFx[i].age += dt; if (lockFx[i].age > 0.6) lockFx.splice(i, 1); }
+    if (!sig && lock && sigCd <= 0 && !poopSitting() && !(uni && uni.lunge)) { var p = sigParams(); if (sigCanFire(lock.m, p)) sigStart(lock.m, p); }
+  }
+  function sigEnd() {
+    var S = sig; sig = null; if (!S) return; cat.squash = 1;
+    for (var i = 0; i < 4; i++) spawnDust(cat.x, cat.y, Math.atan2(S.uy, S.ux) + (i - 1.5) * 0.9, 10 * entityScaleMult);
+    feedback("land");
+  }
+  function sigNextBounce() { // 暹罗：90 内找下一只
+    var S = sig, best = null, bd = 90 * entityScaleMult;
+    gridEach(cat.x, cat.y, bd + 20, function (m) { if (!uniOk(m) || m === S.m) return; var d = distance(m.x, m.y, cat.x, cat.y); if (d < bd) { bd = d; best = m; } });
+    return best;
+  }
+  // 在 updateCat 里调用（位移类）
+  function sigStep(dt) {
+    var S = sig; if (!S) return; var esm = entityScaleMult;
+    var alive = mice.indexOf(S.m) >= 0 && S.m.seed === S.seed && uniOk(S.m);
+    S.t += dt;
+    if (S.ph === "wind") { if (!alive) { sig = null; sigCd = Math.min(sigCd, 0.3); return; } if (S.t >= S.wind) sigGo(); return; }
+    var k = Math.min(1, S.t / S.dur), e, step, px = cat.x, py = cat.y;
+    if (S.kind === "black") {
+      if (k >= 1 && !S.arrived) { S.arrived = true; cat.x = S.bx; cat.y = S.by; S.hide = false; sigFxAdd({ type: "smoke", x: cat.x, y: cat.y }); if (CA.sfx.uni) CA.sfx.uni("land"); }
+      else if (S.arrived && S.t >= S.dur + 0.08) sigEnd();
+      return;
+    }
+    if (S.kind === "calico" && !S.gold) { // 拉鼠到嘴边
+      if (alive) { var m = S.m; m.stun = Math.max(m.stun || 0, 0.1); m.stunKind = "hook"; m.x = S.mx0 + (cat.x - S.mx0) * k * k; m.y = S.my0 + (cat.y - S.my0) * k * k; }
+      if (k >= 1 || !alive) sigEnd(); return;
+    }
+    if (S.kind === "orange") { e = k; S.z = Math.sin(Math.PI * k) * 42 * esm; }
+    else if (S.kind === "blue") e = k;
+    else e = 1 - (1 - k) * (1 - k);
+    step = S.len * e - S.done; S.done = S.len * e;
+    cat.x += S.ux * step; cat.y += S.uy * step;
+    var obs = queryNearbyObstacles(cat.x, cat.y);
+    if (S.kind !== "orange") { for (var i = 0; i < obs.length; i++) resolveCircleAabb(cat, obs[i]); if (TERR) TERR.push(cat); }
+    if (S.kind === "blue") {
+      if (!reducedMotion && Math.random() < 0.6) sigFxAdd({ type: "wind", x: cat.x, y: cat.y, a: Math.atan2(S.uy, S.ux), off: (Math.random() - 0.5) * 30, opt: 1 });
+      var moved = distance(px, py, cat.x, cat.y); if (step > 0.5 && moved < step * 0.35) { S.bumped = true; k = 1; } // 撞障碍弹停
+    }
+    if (k >= 1) {
+      if (S.kind === "orange") { S.z = 0; for (i = 0; i < obs.length; i++) resolveCircleAabb(cat, obs[i]); if (TERR) TERR.push(cat); sigFxAdd({ type: "ring", x: cat.x, y: cat.y, col: "rgba(255,220,170,", r: 40 });
+        if (S.caught < S.p.max) { var nb = null, nd = 40 * esm + cat.r; gridEach(cat.x, cat.y, nd + 10, function (mm) { if (uniOk(mm)) { var dd = distance(mm.x, mm.y, cat.x, cat.y); if (dd < nd) { nd = dd; nb = mm; } } }); if (nb) { sigEnd(); uniStartLunge(nb, true); uni.lunge.keep = true; return; } } }
+      if (S.kind === "siamese" && S.caught > 0 && S.caught < S.p.max) { var nx = sigNextBounce(); if (nx) { S.m = nx; S.seed = nx.seed; S.n++; sigGo(); return; } }
+      sigEnd();
+    }
+  }
+  function sigCatchBonus() { return sig && sig.go && sig.kind === "blue" && sig.caught < sig.p.max ? 15 * entityScaleMult : 0; }
+  function sigOnCapture(m) {
+    if (!sig || !sig.go) return;
+    sig.caught++; sigCount.caught++;
+    if (!sig.hitStopped && !reducedMotion) { sig.hitStopped = true; hitStopT = Math.max(hitStopT, 0.06); sigFlash = 0.034; }
+    buzz(18);
+    if (sig.kind === "white") {
+      sigFxAdd({ type: "ice", x: cat.x, y: cat.y, r: 70, life: 0.6 });
+      gridEach(cat.x, cat.y, 80 * entityScaleMult, function (o) { if (o !== m && uniOk(o) && distance(o.x, o.y, cat.x, cat.y) < 70 * entityScaleMult) stunM(o, 1.2, "ice"); });
+    }
+    if (sig.kind === "siamese") { sigFxAdd({ type: "note", x: m.x, y: m.y - 20, n: sig.n, life: 0.8 }); if (CA.sfx.uni) CA.sfx.uni("chain", sig.n + 1); }
+    if (sig.kind === "orange" || sig.kind === "blue") sigFxAdd({ type: "ring", x: m.x, y: m.y, col: "rgba(255,255,255,", r: 26 });
+  }
+  function sigCatStretch() {
+    if (!sig || reducedMotion) return null;
+    if (sig.ph === "wind") return { a: Math.atan2(sig.uy, sig.ux), s: 0.86 };
+    if (sig.kind === "blue") return { a: Math.atan2(sig.uy, sig.ux), s: 0.9 };
+    return { a: Math.atan2(sig.uy, sig.ux), s: 1 + 0.3 * Math.sin(Math.PI * Math.min(1, sig.t / (sig.dur || 1))) };
+  }
+  // ---- 画：锁定准星 / 小旗 / 预告扇形 / 冷却环（猫下面） ----
+  function sigDrawUnder() {
+    var col = SIG_COL[currentSkin] || "#ff8a2a", t = elapsedPlayTime, csx = worldToScreenX(cat.x), csy = worldToScreenY(cat.y);
+    if (flag) { var fx0 = worldToScreenX(flag.x), fy0 = worldToScreenY(flag.y); ctx.fillStyle = "rgba(0,0,0,.18)"; ctx.beginPath(); ctx.ellipse(fx0, fy0, s(9), s(4), 0, 0, 7); ctx.fill();
+      ctx.strokeStyle = "#6b4a2a"; ctx.lineWidth = s(2.5); ctx.beginPath(); ctx.moveTo(fx0, fy0); ctx.lineTo(fx0, fy0 - s(28)); ctx.stroke();
+      ctx.fillStyle = col; ctx.beginPath(); ctx.moveTo(fx0, fy0 - s(28)); ctx.lineTo(fx0 + s(16), fy0 - s(23) + Math.sin(t * 8) * s(1.5)); ctx.lineTo(fx0, fy0 - s(17)); ctx.fill(); }
+    if (lock) { var m = lock.m, mx = worldToScreenX(m.x), my = worldToScreenY(m.y) + s(4), r = s(20) + Math.sin(t * 9) * s(1.5);
+      if (lock.t < 0.6) { ctx.globalAlpha = 1 - lock.t / 0.6; ctx.setLineDash([s(5), s(5)]); ctx.strokeStyle = "#fff"; ctx.lineWidth = s(2); ctx.beginPath(); ctx.moveTo(csx, csy); ctx.lineTo(mx, my); ctx.stroke(); ctx.setLineDash([]); ctx.globalAlpha = 1; }
+      ctx.strokeStyle = col; ctx.lineWidth = s(3.5); ctx.lineCap = "round";
+      for (var q = 0; q < 4; q++) { var a0 = q * Math.PI / 2 + t * 1.5; ctx.beginPath(); ctx.arc(mx, my, r, a0 + 0.25, a0 + 1.1); ctx.stroke(); }
+      ctx.fillStyle = col; ctx.beginPath(); var ty = my - s(40) - Math.abs(Math.sin(t * 6)) * s(4); ctx.moveTo(mx - s(6), ty); ctx.lineTo(mx + s(6), ty); ctx.lineTo(mx, ty + s(8)); ctx.fill(); }
+    for (var i = 0; i < lockFx.length; i++) { var L = lockFx[i]; emojiQuick("✖", worldToScreenX(L.x), worldToScreenY(L.y) - s(30), s(18), 1 - L.age / 0.6, "#888"); }
+    if (sig && sig.ph === "wind") { // 预告：扇形/直线亮一下
+      var p = sig.p, a = Math.atan2(sig.uy, sig.ux), R = s(p.R); ctx.fillStyle = col; ctx.globalAlpha = 0.22;
+      ctx.beginPath(); if (p.kind === "blue") { ctx.save(); ctx.translate(csx, csy + s(10)); ctx.rotate(a); ctx.fillRect(0, -s(15), R, s(30)); ctx.restore(); }
+      else if (p.half >= Math.PI) { ctx.arc(csx, csy + s(10), R, 0, 7); ctx.fill(); }
+      else { ctx.moveTo(csx, csy + s(10)); ctx.arc(csx, csy + s(10), R, a - p.half, a + p.half); ctx.closePath(); ctx.fill(); }
+      ctx.globalAlpha = 1; }
+    if (sigCd > 0 && lock) { var P = sigParams(), fr = 1 - sigCd / P.cd; ctx.strokeStyle = "rgba(255,255,255,.75)"; ctx.lineWidth = s(2); ctx.beginPath(); ctx.arc(csx, csy + s(14), s(22), -Math.PI / 2, -Math.PI / 2 + fr * 6.283); ctx.stroke(); }
+    // 毛线 / 眼光
+    if (sig && sig.go && sig.kind === "calico") { var mm = sig.m; ctx.strokeStyle = "#ff6fa8"; ctx.lineWidth = s(3); ctx.beginPath(); ctx.moveTo(csx, csy); ctx.quadraticCurveTo((csx + worldToScreenX(mm.x)) / 2, (csy + worldToScreenY(mm.y)) / 2 - s(20), worldToScreenX(mm.x), worldToScreenY(mm.y)); ctx.stroke();
+      ctx.strokeStyle = "#ffd23f"; ctx.lineWidth = s(1.5); ctx.stroke(); emojiQuick("🧶", worldToScreenX(mm.x), worldToScreenY(mm.y) - s(8), s(18), 1); }
+    if (sig && sig.go && sig.kind === "orange") { ctx.setLineDash([s(4), s(6)]); ctx.strokeStyle = "rgba(255,138,42,.8)"; ctx.lineWidth = s(2.5); ctx.beginPath(); ctx.moveTo(worldToScreenX(sig.sx), worldToScreenY(sig.sy));
+      var ex = sig.sx + sig.ux * sig.len, ey = sig.sy + sig.uy * sig.len; ctx.quadraticCurveTo(worldToScreenX((sig.sx + ex) / 2), worldToScreenY((sig.sy + ey) / 2) - s(84 * entityScaleMult), worldToScreenX(ex), worldToScreenY(ey)); ctx.stroke(); ctx.setLineDash([]); }
+  }
+  function sigDrawOver() {
+    for (var i = 0; i < sigFx.length; i++) { var f = sigFx[i], life = f.life || 0.5, k = f.age / life, x = worldToScreenX(f.x), y = worldToScreenY(f.y);
+      if (f.type === "smoke") { ctx.fillStyle = "rgba(60,40,90," + (0.7 * (1 - k)) + ")"; for (var j = 0; j < 5; j++) { var aa = j * 1.26 + f.x; ctx.beginPath(); ctx.arc(x + Math.cos(aa) * s(16) * k, y + Math.sin(aa) * s(10) * k, s(10) * (1 - k * 0.5), 0, 7); ctx.fill(); } }
+      else if (f.type === "eye") { ctx.strokeStyle = "rgba(255,220,60," + (1 - k) + ")"; ctx.lineWidth = s(3); ctx.beginPath(); ctx.moveTo(x, y - s(10)); ctx.lineTo(worldToScreenX(f.x2), worldToScreenY(f.y2) - s(10)); ctx.stroke(); }
+      else if (f.type === "ring") { ctx.strokeStyle = f.col + (1 - k) + ")"; ctx.lineWidth = s(3); ctx.beginPath(); ctx.ellipse(x, y + s(12), s(f.r) * (0.4 + k), s(f.r) * (0.4 + k) * 0.5, 0, 0, 7); ctx.stroke(); }
+      else if (f.type === "ice") { ctx.strokeStyle = "rgba(150,220,255," + (1 - k) + ")"; ctx.lineWidth = s(5); ctx.beginPath(); ctx.ellipse(x, y + s(10), s(f.r) * Math.min(1, k * 3), s(f.r) * 0.55 * Math.min(1, k * 3), 0, 0, 7); ctx.stroke(); if (k < 0.5) emojiQuick("❄️", x + s(30), y - s(10), s(16), 1 - k * 2); }
+      else if (f.type === "wind") { ctx.strokeStyle = "rgba(255,255,255," + (1 - k) * 0.8 + ")"; ctx.lineWidth = s(2); var c = Math.cos(f.a), sn = Math.sin(f.a), ox = -sn * s(f.off), oy = c * s(f.off); ctx.beginPath(); ctx.moveTo(x + ox - c * s(10), y + s(12) + oy - sn * s(10)); ctx.lineTo(x + ox - c * s(38), y + s(12) + oy - sn * s(38)); ctx.stroke(); }
+      else if (f.type === "note") { emojiQuick(["♪", "♫", "🎶", "⭐"][Math.min(3, f.n)], x, y - s(30) * k, s(20 + f.n * 3), 1 - k, "#3fa9ff"); }
+    }
+    if (sigFlash > 0) { ctx.fillStyle = "rgba(255,255,255,0.35)"; ctx.fillRect(0, 0, W, H); }
+  }
+
   function update(dt) {
     updateMusic();
     if (state === STATE_PLAY) {
@@ -3952,6 +4184,7 @@
       var sdt = dt; if (hitStopT > 0) { hitStopT -= dt; sdt = dt * 0.12; } // 命中停顿：只放慢动作，不影响计时
       updateCat(sdt);
       nestUpdate(dt);
+      sigUpdate(sdt);
       uniUpdate(sdt);
       updateAbilities(sdt);
       updateCamera(dt);
@@ -3992,6 +4225,7 @@
     drawAbilityGround();
     drawDust();
     uniDrawUnder();
+    sigDrawUnder();
     drawMice();
     drawAbilityBehindCat();
     drawCat();
@@ -4004,7 +4238,9 @@
     drawEffects();
     drawJuice();
     uniDrawOver();
+    sigDrawOver();
     drawNestArrows();
+    drawMouseArrows();
     drawJoystick();
     if (shaking) ctx.restore();
   }
@@ -4208,6 +4444,9 @@
     setStraight: function (v) { if (ab) ab.straight = v; },
     turn: function () { if (ab) ab.turnAcc = Math.PI; },
     obstaclesNear: function () { return queryNearbyObstacles(cat.x, cat.y).map(function (o) { return { x: o.x - cat.x, y: o.y - cat.y, w: o.w, h: o.h }; }); },
+    get sigInfo() { return { cd: sigCd, active: !!sig, kind: sig && sig.kind, fired: sigCount.fired, caught: sigCount.caught, lock: !!lock, flag: !!flag, p: sigParams() }; },
+    get miceScreen() { return mice.filter(uniOk).map(function (m) { return { x: worldToScreenX(m.x), y: worldToScreenY(m.y), d: distance(m.x, m.y, cat.x, cat.y), type: m.type }; }); },
+    lockNearest: function (maxD) { var b = null, bd = maxD || 1e9; mice.forEach(function (m) { if (!uniOk(m)) return; var d = distance(m.x, m.y, cat.x, cat.y); if (d < bd) { bd = d; b = m; } }); if (b) setLock(b); return !!b; },
     get catScreen() { return { x: worldToScreenX(cat.x), y: worldToScreenY(cat.y) }; },
     teleport: function (x, y) { cat.x = x; cat.y = y; if (TERR) TERR.push(cat); camera.x = x; camera.y = y; },
     setMove: function (x, y) { moveDir.x = x; moveDir.y = y; },
