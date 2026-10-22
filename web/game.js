@@ -272,6 +272,25 @@
       });
     }
 
+    // v14 场景大道具（独立随机数，不改变原有障碍布局）：树（只有树干有碰撞）、花坛、踏脚石小路、草丛
+    var r2 = mulberry32(hashChunkSeed(worldSeed, cx, cy) ^ 0x5bd1e995);
+    if (r2() < 0.5) {
+      for (var tt = 0; tt < 4; tt++) {
+        var tx = baseX + 60 + r2() * (CHUNK_SIZE - 120), ty = baseY + 60 + r2() * (CHUNK_SIZE - 120), okT = true;
+        if (Math.abs(tx) > 1500 - 140 || Math.abs(ty) > 1500 - 140 || Math.sqrt(tx * tx + ty * ty) < 260) continue;
+        for (i = 0; i < obstacles.length; i++) { var oo = obstacles[i]; if (Math.abs(oo.x + oo.w / 2 - tx) < 120 && Math.abs(oo.y + oo.h / 2 - ty) < 110) { okT = false; break; } }
+        if (okT && typeof nests !== "undefined") for (i = 0; i < nests.length; i++) if (nests[i].alive && Math.abs(nests[i].x - tx) < 200 && Math.abs(nests[i].y - ty) < 200) { okT = false; break; }
+        if (!okT) continue;
+        obstacles.push({ x: tx - 16, y: ty - 14, w: 32, h: 18, kind: "tree", tx: tx, ty: ty, fruit: r2() < 0.35, sc: 0.85 + r2() * 0.3 });
+        break;
+      }
+    }
+    var nb = r2() < 0.35 ? 1 : 0;
+    for (i = 0; i < nb; i++) decor.push({ x: baseX + 80 + r2() * (CHUNK_SIZE - 160), y: baseY + 80 + r2() * (CHUNK_SIZE - 160), kind: "bed", rot: 0, scale: 0.85 + r2() * 0.3 });
+    if (r2() < 0.45) { var px0 = baseX + r2() * CHUNK_SIZE, py0 = baseY + r2() * CHUNK_SIZE, pa = r2() * Math.PI * 2; for (i = 0; i < 4; i++) decor.push({ x: px0 + Math.cos(pa) * i * 70, y: py0 + Math.sin(pa) * i * 70, kind: "stones", rot: 0, scale: 0.8 + r2() * 0.3 }); }
+    var nt = 1 + Math.floor(r2() * 3); for (i = 0; i < nt; i++) decor.push({ x: baseX + r2() * CHUNK_SIZE, y: baseY + r2() * CHUNK_SIZE, kind: "tuft", rot: 0, scale: 0.8 + r2() * 0.4 });
+    decor.sort(function (a, b) { var o = { stones: 0, bed: 1 }; return (o[a.kind] == null ? 2 : o[a.kind]) - (o[b.kind] == null ? 2 : o[b.kind]); });
+
     var mouseSpawnPoints = [];
     var spawnCount = 2 + Math.floor(rng() * 3);
     for (i = 0; i < spawnCount; i++) {
@@ -1958,8 +1977,11 @@
     });
   }
 
+  var DECOR_IMG = { bed: ["flowerbed", 150], stones: ["stones", 64], tuft: ["grass", 46] };
   function drawDecor(d) {
     var sx = worldToScreenX(d.x), sy = worldToScreenY(d.y);
+    var di = DECOR_IMG[d.kind];
+    if (di) { var im = IMG[di[0]]; if (!im) return; var w = di[1] * d.scale * SCALE, h = w * im.height / im.width; if (sx < -w || sx > W + w || sy < -h || sy > H + h) return; ctx.drawImage(fit(im, h), sx - w / 2, sy - h * 0.8, w, h); return; }
     if (sx < -40 || sx > W + 40 || sy < -40 || sy > H + 40) return;
     var h = hash01(d.x, d.y);
     ctx.save();
@@ -2000,6 +2022,20 @@
     ctx.restore();
   }
 
+  // 树冠画在小猫/老鼠之上；小猫走到树冠下时树变半透明，不挡视线
+  function drawTrees() {
+    var csx = worldToScreenX(cat.x), csy = worldToScreenY(cat.y);
+    forEachVisibleChunk(function (chunk) {
+      for (var i = 0; i < chunk.obstacles.length; i++) {
+        var o = chunk.obstacles[i]; if (o.kind !== "tree") continue;
+        var im = IMG[o.fruit ? "tree_fruit" : "tree"]; if (!im) continue;
+        var ts = SCALE * o.sc, w = 170 * ts, h = w * im.height / im.width, bx = worldToScreenX(o.tx), by = worldToScreenY(o.ty) + 8 * ts;
+        if (bx + w / 2 < 0 || bx - w / 2 > W || by < 0 || by - h > H) continue;
+        var under = Math.abs(csx - bx) < w * 0.45 && csy < by - 10 * ts && csy > by - h;
+        ctx.globalAlpha = under ? 0.42 : 1; ctx.drawImage(fit(im, h), bx - w / 2, by - h, w, h); ctx.globalAlpha = 1;
+      }
+    });
+  }
   function drawObstacles() {
     forEachVisibleChunk(function (chunk) {
       for (var i = 0; i < chunk.obstacles.length; i++) drawObstacle(chunk.obstacles[i]);
@@ -2011,6 +2047,9 @@
     var sw = o.w * SCALE, sh = o.h * SCALE;
     if (sx + sw < -20 || sx > W + 20 || sy + sh < -20 || sy > H + 20) return;
     var cx = sx + sw / 2, cy = sy + sh / 2;
+    if (o.kind === "tree") { var ts = SCALE * o.sc; shadow(worldToScreenX(o.tx) + 34 * ts, worldToScreenY(o.ty) - 4 * ts, 90 * ts); return; }
+    var oim = IMG[o.kind];
+    if (oim) { shadow(cx + sw * 0.05, sy + sh * 0.95, sw * 0.6); var ow2 = sw * (o.kind === "crate" ? 1.15 : 1.35), oh2 = ow2 * oim.height / oim.width; ctx.drawImage(fit(oim, oh2), cx - ow2 / 2, sy + sh * 1.02 - oh2, ow2, oh2); return; }
     ctx.save();
     ART.ellipse(ctx, cx, sy + sh * 0.96, sw * 0.52, sh * 0.12, "rgba(40,90,30,0.18)");
     if (o.kind === "crate") {
@@ -2162,27 +2201,69 @@
     var start = isBack ? [mp[0], mp[1] - 40] : (view === "side" ? [mp[0] + 30, mp[1]] : [mp[0] + (view === "q34" ? 20 : 0), mp[1] + 40]);
     var px = start[0] + (mp[0] - start[0]) * k, py = start[1] + (mp[1] - start[1]) * k;
     var mu = u * 0.55 * (1 - k * 0.8);
-    var spr = ANIM.mouseSprite(gulp.type, isBack ? "back" : "front", "sit", 2, spritePx(mu));
     ctx.globalAlpha = isBack ? 1 - k * 0.7 : 1;
-    blit(spr, x + px * u * flip, y + py * u, mu, flip);
+    if (!paintedMouse(gulp.type, x + px * u * flip, y + py * u, mu, isBack ? "back" : "front", flip, ["sit", 2], 0)) blit(ANIM.mouseSprite(gulp.type, isBack ? "back" : "front", "sit", 2, spritePx(mu)), x + px * u * flip, y + py * u, mu, flip);
     ctx.globalAlpha = 1;
   }
 
   // v13 A2：橘子改用手绘精灵（img/orange_*.png，正面/侧面/背面 3 张），动作用弹跳 + 挤压拉伸做；其它 5 只猫暂保留原画
-  var PAINTED = { front: null, side: null, back: null }, paintedReady = 0;
-  ["front", "side", "back"].forEach(function (k) { var im = new Image(); im.onload = function () { PAINTED[k] = im; paintedReady++; if (paintedReady === 3) setTimeout(function () { try { paintSkinCards(); } catch (e) {} }, 0); }; im.src = "img/orange_" + k + ".png?v=" + (window.CAT_BUILD && window.CAT_BUILD.sha || "1"); });
-  function paintedCat(x, y, u, view, flip, st, breathe, runCycle) {
-    if (paintedReady < 3) return false;
-    var run = st[0] === "run", back = view === "back" || view === "b34", gul = st[0] === "gulp";
-    var key = back ? "back" : (run && (view === "side" || view === "q34")) ? "side" : "front", im = PAINTED[key];
-    var H = (key === "side" ? 84 : 98) * u, Wd = H * im.width / im.height;
-    var bob = 0, sx = 1, sy = 1, rot = 0;
-    if (run) { var ph = runCycle * 2.4; bob = Math.abs(Math.sin(ph)) * 7 * u; sy = 1 - Math.cos(ph * 2) * 0.04; sx = 2 - sy; rot = key === "side" ? Math.sin(ph) * 0.07 : Math.sin(ph) * 0.05; }
-    else if (gul) { var gk = st[1]; sy = [1, 0.9, 1.08, 0.95, 1][gk] || 1; sx = 2 - sy; }
+  // v14：全部角色/道具改为手绘精灵（img/*.webp，AI 生成后抠图；约 400KB）。加载完成前回退到原来的程序绘制
+  var IMG = {}, IMG_LIST = [];
+  ["orange", "black", "white", "calico", "blue", "siamese"].forEach(function (k) { IMG_LIST.push(k + "_front", k + "_side", k + "_back", k + "_run_side", k + "_run_front", k + "_run_back"); });
+  ["grey", "brown", "gold"].forEach(function (k) { IMG_LIST.push("m_" + k + "_front", "m_" + k + "_side", "m_" + k + "_back"); });
+  IMG_LIST.push("nest", "nest_dead", "poop", "crate", "bush", "rock", "tree", "tree_fruit", "flowerbed", "stones", "fence", "grass");
+  var imgLoaded = 0;
+  IMG_LIST.forEach(function (k) { var im = new Image(); im.decoding = "async"; im.onload = function () { im._n = k; IMG[k] = im; imgLoaded++; if (/_front$/.test(k)) setTimeout(function () { try { paintSkinCards(); } catch (e) {} }, 0); }; im.src = "img/" + k + ".webp?v=" + (window.CAT_BUILD && window.CAT_BUILD.sha || "1"); });
+  // 预缩放缓存：按屏幕像素高度（量化到 ~3%）把精灵缩放一次，之后每帧近似 1:1 贴图（比每帧缩放大图快很多）
+  var fitCache = new Map();
+  function fit(im, hCss) {
+    var hp = Math.max(4, hCss * DPR), q = Math.round(Math.log(hp) / 0.03), key = im._n + "|" + q, c = fitCache.get(key);
+    if (!c) { if (fitCache.size > 400) fitCache.clear(); var h = Math.round(Math.exp(q * 0.03)), w = Math.max(1, Math.round(h * im.width / im.height)); c = document.createElement("canvas"); c.width = w; c.height = h; var g = c.getContext("2d"); g.imageSmoothingQuality = "high"; g.drawImage(im, 0, 0, w, h); fitCache.set(key, c); }
+    return c;
+  }
+  function catImgs(skin) { var f = IMG[skin + "_front"], sd = IMG[skin + "_side"], b = IMG[skin + "_back"]; return f && sd && b ? { front: f, side: sd, back: b } : null; }
+  // v14 跑步：每个方向 8 帧真实步态（腿交替摆动、身体起伏、尾巴甩、头部轻晃；img/*_run_*.webp，由手绘原图分层绑定后逐帧生成）
+  // 侧面第 9 帧为飞扑；起跑/停下用跑步第 1 帧过渡到坐姿
+  var RUN_N = { side: 9, front: 8, back: 8 }, paintPounce = false;
+  function runFrameDraw(strip, n, f, x, y, H, flipX, extraRot) {
+    var fw = strip.width / n, Wd = H * fw / strip.height, c = fitStrip(strip, H);
+    var cw = c.width / n;
+    ctx.save(); ctx.translate(x, y); if (extraRot) ctx.rotate(extraRot); ctx.scale(flipX, 1);
+    ctx.drawImage(c, f * cw, 0, cw, c.height, -Wd / 2, -H, Wd, H); ctx.restore();
+  }
+  function fitStrip(im, hCss) { return fit(im, hCss); }
+  function paintedCat(x, y, u, view, flip, st, breathe, runCycle, skin, a) {
+    var PAINTED = catImgs(skin); if (!PAINTED) return false;
+    var back = view === "back" || view === "b34";
+    var dir = back ? "back" : view === "side" ? "side" : "front", strip = IMG[skin + "_run_" + dir];
+    var mode = a ? a.mode : (st[0] === "run" ? "run" : "sit"), gul = st[0] === "gulp", foot = y + 46 * u;
+    if (strip && (mode === "run" || mode === "stand" || mode === "sitdown" || paintPounce) && !gul) {
+      var H = (dir === "side" ? 92 : 96) * u, f;
+      if (paintPounce) f = dir === "side" ? 8 : 3;
+      else if (mode === "run") f = Math.floor(runCycle * 2.4 / (Math.PI * 2) * 8 + 800) % 8;
+      else f = 0;
+      var sq = mode === "stand" || mode === "sitdown" ? 0.06 : 0;
+      if (sq) { ctx.save(); ctx.translate(x, foot); ctx.scale(1 + sq * 0.5, 1 - sq); ctx.translate(-x, -foot); }
+      runFrameDraw(strip, RUN_N[dir], f, x, foot + 4 * u, H, dir === "side" ? flip : dir === "front" ? -flip : flip, paintPounce && dir === "side" ? -0.12 * flip : 0);
+      if (sq) ctx.restore();
+      return true;
+    }
+    var key = back ? "back" : "front", im = PAINTED[key];
+    var H2 = 98 * u, Wd = H2 * im.width / im.height, sx = 1, sy = 1;
+    if (gul) { sy = [1, 0.9, 1.08, 0.95, 1][st[1]] || 1; sx = 2 - sy; }
     else { sx = 1 - breathe * 0.5; sy = 1 + breathe; }
-    ctx.save(); ctx.translate(x, y + 46 * u - bob); ctx.rotate(rot); ctx.scale((key === "side" ? flip : 1) * sx, sy);
-    ctx.drawImage(im, -Wd / 2, -H, Wd, H); ctx.restore();
+    ctx.save(); ctx.translate(x, foot); ctx.scale(sx, sy);
+    ctx.drawImage(fit(im, H2), -Wd / 2, -H2, Wd, H2); ctx.restore();
     return true;
+  }
+  function paintedMouse(type, x, y, u, view, flip, st, runCycle, alphaK) {
+    var t = type === "brown" ? "brown" : type === "gold" ? "gold" : "grey", run = st[0] === "run", back = view === "back" || view === "b34";
+    var key = back ? "back" : (run && (view === "side" || view === "q34")) ? "side" : (run && view === "front") ? "front" : (view === "side" || view === "q34") ? "side" : "front";
+    var im = IMG["m_" + t + "_" + key]; if (!im) return false;
+    var H = (key === "side" ? 34 : 46) * u, Wd = H * im.width / im.height, bob = 0, sy = 1;
+    if (run) { var ph = runCycle * 3; bob = Math.abs(Math.sin(ph)) * 4 * u; sy = 1 - Math.cos(ph * 2) * 0.05; }
+    ctx.save(); ctx.translate(x, y + 24 * u - bob); ctx.scale((key === "side" ? flip : 1) * (2 - sy), sy);
+    ctx.drawImage(fit(im, H), -Wd / 2, -H, Wd, H); ctx.restore(); return true;
   }
   // ==== v13 B4 每局 3 个小任务（只给星星，不影响分数）+ B7 小鱼干（仅本地）& 帽子小铺 ====
   var MISSION_POOL = [
@@ -2283,7 +2364,7 @@
     var breathe = sitting ? Math.sin((a.t + a.phase) * 2.4) * 0.03 : 0;
     shadow(x, y + 46 * u, (st[0] === "run" ? 30 : 26) * u);
     if (!ghost) drawGulpMouse(x, y, u, view, flip, true);
-    if (skin === "orange" && paintedCat(x, y, u, view, flip, st, breathe, runCycle)) { if (!ghost) drawGulpMouse(x, y, u, view, flip, false); return; }
+    if (paintedCat(x, y, u, view, flip, st, breathe, runCycle, skin, a)) { if (!ghost) drawGulpMouse(x, y, u, view, flip, false); return; }
     blit(ANIM.catSprite(skin, view, st[0], st[1], spritePx(u)), x, y, u, flip, 1 - breathe * 0.5, 1 + breathe, 46);
     if (!ghost) drawGulpMouse(x, y, u, view, flip, false);
   }
@@ -2292,7 +2373,7 @@
     var sx = worldToScreenX(cat.x), sy = worldToScreenY(cat.y) + s(evoHop()), stc = uniCatStretch();
     if (poopSitting() && !reducedMotion) sx += Math.sin(elapsedPlayTime * 50) * s(1.5);
     if (stc) { ctx.save(); ctx.translate(sx, sy); ctx.rotate(stc.a); ctx.scale(stc.s, 1 / Math.sqrt(stc.s)); ctx.rotate(-stc.a); ctx.translate(-sx, -sy); }
-    drawCatAt(sx, sy, s(cat.r), catAnim, cat.runCycle, currentSkin);
+    paintPounce = !!(uni && uni.lunge); drawCatAt(sx, sy, s(cat.r), catAnim, cat.runCycle, currentSkin); paintPounce = false;
     drawHat(sx, sy, s(cat.r), catAnim);
     if (stc) ctx.restore();
   }
@@ -2374,7 +2455,7 @@
       if (m.cornerT > 0 || m.trem > 0 || (m.beh === "timid" && m.state === "flee" && v.full)) ox = Math.sin(elapsedPlayTime * 60) * 2 * u;
       if (m.asleep) st = ["sit", 2];
       if (dayNow.night > 0.5 && mouseInDark(m)) { var ea = 0.5 + 0.5 * dayNow.night; var blk = Math.sin(elapsedPlayTime * 2.3 + m.seed * 11) > 0.96; if (!blk) { var gw = glowSprite(), gs = s(9); ctx.globalAlpha = resScale < 1 ? 0 : ea; ctx.drawImage(gw, sx - 5 * u - gs / 2, sy - 8 * u - gs / 2, gs, gs); ctx.drawImage(gw, sx + 5 * u - gs / 2, sy - 8 * u - gs / 2, gs, gs); ctx.globalAlpha = 1; ctx.fillStyle = "#fff8c0"; ctx.beginPath(); ctx.arc(sx - 5 * u, sy - 8 * u, s(1.6), 0, 7); ctx.arc(sx + 5 * u, sy - 8 * u, s(1.6), 0, 7); ctx.fill(); } continue; }
-      if (!dbgDraw.noSprite) blit(ANIM.mouseSprite(m.type, d[0], st[0], st[1], spritePx(u)), sx + ox, sy, u, d[1]);
+      if (!dbgDraw.noSprite && !paintedMouse(m.type, sx + ox, sy, u, d[0], d[1], st, m.runCycle)) blit(ANIM.mouseSprite(m.type, d[0], st[0], st[1], spritePx(u)), sx + ox, sy, u, d[1]);
       if (!dbgDraw.noTell && (v.full || m.type === "gold" || m.packId)) drawTell(m, sx + ox, sy, u, st, v.full, v.i);
     }
   }
@@ -3397,7 +3478,9 @@
 
   // ---- 美术：Q 版老鼠窝 / 便便 / 篱笆（离屏缓存） ----
   var nestSprCache = {};
+  function imgSpr(name, w, ox, oy) { var im = IMG[name]; if (!im) return null; if (!im._w) { im._w = w; im._h = w * im.height / im.width; im._ox = ox * w; im._oy = oy * im._h; } return im; }
   function nestSprite(dead, px) {
+    var pi = dead ? imgSpr("nest_dead", 110, 0.5, 0.55) : imgSpr("nest", 112, 0.41, 0.74); if (pi) return pi;
     var key = (dead ? "d" : "a") + "|" + Math.round(px * 10) + "|" + DPR;
     if (nestSprCache[key]) return nestSprCache[key];
     var sc = px * DPR, c = document.createElement("canvas"); c.width = Math.ceil(120 * sc); c.height = Math.ceil(100 * sc);
@@ -3439,6 +3522,7 @@
   }
   var poopSprCache = {};
   function poopSprite(px) {
+    var pi = imgSpr("poop", 54, 0.5, 0.9); if (pi) return pi;
     var key = Math.round(px * 10) + "|" + DPR; if (poopSprCache[key]) return poopSprCache[key];
     var sc = px * DPR, c = document.createElement("canvas"); c.width = Math.ceil(64 * sc); c.height = Math.ceil(64 * sc);
     var g = c.getContext("2d"); g.scale(sc, sc); g.translate(32, 50); g.lineJoin = "round";
@@ -3455,6 +3539,7 @@
   }
   function blitSpr(c, sx, sy, scale, alpha) {
     if (alpha != null) ctx.globalAlpha = alpha;
+    if (c._n) { ctx.drawImage(fit(c, c._h * scale), sx - c._ox * scale, sy - c._oy * scale, c._w * scale, c._h * scale); if (alpha != null) ctx.globalAlpha = 1; return; }
     ctx.drawImage(c, sx - c._ox * scale, sy - c._oy * scale, c._w * scale, c._h * scale);
     if (alpha != null) ctx.globalAlpha = 1;
   }
@@ -3473,7 +3558,9 @@
     var e, wx, wy;
     [[-MAP_HALF, "h"], [MAP_HALF, "h"]].forEach(function (f) {
       e = f[0]; if (Math.abs(e - camera.y) > hh + 40) return;
-      var sy = worldToScreenY(e); rail(worldToScreenX(x0), sy - s(12), worldToScreenX(x1), sy - s(12)); rail(worldToScreenX(x0), sy - s(24), worldToScreenX(x1), sy - s(24));
+      var sy = worldToScreenY(e), fim = IMG.fence;
+      if (fim) { var fw = 160, fx0 = Math.floor(x0 / fw) * fw, fh = s(fw) * fim.height / fim.width; for (wx = fx0; wx < x1; wx += fw) ctx.drawImage(fit(fim, fh), worldToScreenX(wx), sy - fh * 0.92, s(fw) + 1, fh); return; }
+      rail(worldToScreenX(x0), sy - s(12), worldToScreenX(x1), sy - s(12)); rail(worldToScreenX(x0), sy - s(24), worldToScreenX(x1), sy - s(24));
       for (wx = x0; wx <= x1; wx += step) post(wx, e);
     });
     [[-MAP_HALF, "v"], [MAP_HALF, "v"]].forEach(function (f) {
@@ -3487,6 +3574,7 @@
     for (i = 0; i < nests.length; i++) {
       var n = nests[i], sx = worldToScreenX(n.x), sy = worldToScreenY(n.y);
       if (sx < -80 || sx > W + 80 || sy < -90 || sy > H + 80) continue;
+      if (IMG.nest) shadow(sx + s(2), sy + 24 * u, 58 * u);
       if (!n.alive && n.deadT < 0.4) { var k = n.deadT / 0.4; blitSpr(nestSprite(false, u), sx, sy, u * (1 - k * 0.3), 1 - k); }
       blitSpr(nestSprite(!n.alive, u), sx, sy, u, n.alive ? 1 : Math.min(1, n.deadT / 0.4) * 0.9);
       if (n.alive && n.flash > 0) { ctx.strokeStyle = "rgba(255,210,80," + (n.flash / 2) + ")"; ctx.lineWidth = s(4); ctx.beginPath(); ctx.arc(sx, sy, s(60) * (1.4 - n.flash * 0.2), 0, 7); ctx.stroke(); }
@@ -3813,6 +3901,7 @@
     drawMice();
     drawAbilityBehindCat();
     drawCat();
+    drawTrees();
     drawAbilityOverlay();
     drawNight();
     drawNightGlow();
@@ -3873,7 +3962,7 @@
     x.clearRect(0, 0, w, h);
     x.translate(w / 2, h * cy);
     x.scale(scale * w / 110, scale * w / 110);
-    if (skinId === "orange" && paintedReady >= 3) { var im = PAINTED.front, H = 96, Wd = H * im.width / im.height; x.drawImage(im, -Wd / 2, 46 - H, Wd, H); return; }
+    var pc = catImgs(skinId); if (pc) { var im = pc.front, H = 96, Wd = H * im.width / im.height; x.drawImage(im, -Wd / 2, 46 - H, Wd, H); return; }
     window.CatArt.paintCat(x, window.CatArt.skinOf(skinId), opt || {});
   }
 
