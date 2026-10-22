@@ -417,10 +417,12 @@
 
   var activePointerId = null;
   var keysDown = {};
-  var DEAD_ZONE_PX = 18;
+  var DEAD_ZONE_PX = 18, lastPtr = null;
 
   function computeDirFromPoint(px, py) {
-    var dx = px - W / 2, dy = py - H / 2;
+    // v16：方向 = 手指位置 - 小猫在屏幕上的位置（地图边缘镜头被夹住、镜头前瞻时也准确）
+    lastPtr = { x: px, y: py };
+    var dx = px - worldToScreenX(cat.x), dy = py - worldToScreenY(cat.y);
     var distPx = Math.sqrt(dx * dx + dy * dy);
     if (distPx < s(DEAD_ZONE_PX)) return null;
     var n = normalize(dx, dy);
@@ -472,7 +474,7 @@
 
   function onPointerUp(e) {
     if (e.pointerId !== activePointerId) return;
-    activePointerId = null; joy = null;
+    activePointerId = null; joy = null; lastPtr = null;
     if (dom && dom.hud) dom.hud.classList.remove("steering");
     moveDir.x = 0; moveDir.y = 0;
     syncKeyDir();
@@ -562,6 +564,7 @@
       cat.slideSign = 0;
     }
 
+    if (activePointerId !== null && !joy && lastPtr) { var pd = computeDirFromPoint(lastPtr.x, lastPtr.y); if (pd) { moveDir.x = pd.x; moveDir.y = pd.y; } else { moveDir.x = 0; moveDir.y = 0; } }
     uniLungeStep(dt);
     var speed = Math.sqrt(cat.vx * cat.vx + cat.vy * cat.vy);
     if (speed > 4) cat.facing = Math.atan2(cat.vy, cat.vx);
@@ -4150,6 +4153,7 @@
     setStraight: function (v) { if (ab) ab.straight = v; },
     turn: function () { if (ab) ab.turnAcc = Math.PI; },
     obstaclesNear: function () { return queryNearbyObstacles(cat.x, cat.y).map(function (o) { return { x: o.x - cat.x, y: o.y - cat.y, w: o.w, h: o.h }; }); },
+    get catScreen() { return { x: worldToScreenX(cat.x), y: worldToScreenY(cat.y) }; },
     teleport: function (x, y) { cat.x = x; cat.y = y; camera.x = x; camera.y = y; },
     setMove: function (x, y) { moveDir.x = x; moveDir.y = y; },
     stepSim: function (sec) { var n = Math.round(sec * 60); for (var i = 0; i < n; i++) update(1 / 60); },
