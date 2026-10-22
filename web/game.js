@@ -305,6 +305,12 @@
     var chunk = chunkCache.get(key);
     if (!chunk) {
       chunk = generateChunk(cx, cy);
+      if (window.CatTerrain) { // v17：地形上不放装饰/障碍/出鼠点（树要离岸更远）
+        var TT = window.CatTerrain;
+        chunk.decor = chunk.decor.filter(function (d) { return !TT.blocked(d.x, d.y, d.kind === "bed" ? 70 : 24); });
+        chunk.obstacles = chunk.obstacles.filter(function (o) { var r = o.kind === "tree" ? 80 : 40; return !TT.blocked(o.x + o.w / 2, o.y + o.h / 2, r) && !TT.inCross(o.x + o.w / 2, o.y + o.h / 2, -120); });
+        chunk.mouseSpawnPoints = chunk.mouseSpawnPoints.filter(function (p) { return !TT.blocked(p.x, p.y, 24) && TT.reachable(p.x, p.y); });
+      }
       chunkCache.set(key, chunk);
     }
     return chunk;
@@ -516,6 +522,7 @@
     var obstacles = queryNearbyObstacles(cat.x, cat.y);
     var i;
     for (i = 0; i < obstacles.length; i++) resolveCircleAabb(cat, obstacles[i]);
+    if (TERR) TERR.push(cat);
 
     // 自动绕行：这一帧实际走的距离比速度本该带它走的距离少太多，说明被
     // 障碍物正面顶住了（切向分量恰好为 0，普通的圆-AABB 推出没法让它滑
@@ -560,6 +567,7 @@
       cat.x += tangentX * cat.slideSign * COLLISION_SLIDE_SPEED * dt;
       cat.y += tangentY * cat.slideSign * COLLISION_SLIDE_SPEED * dt;
       for (i = 0; i < obstacles.length; i++) resolveCircleAabb(cat, obstacles[i]);
+      if (TERR) TERR.push(cat);
     } else {
       cat.slideSign = 0;
     }
@@ -651,7 +659,9 @@
     }
   }
 
+  var TERR = window.CatTerrain;
   function inObstacle(x, y, pad) {
+    if (TERR && (TERR.blocked(x, y, pad + 8) || !TERR.reachable(x, y))) return true;
     var obs = queryNearbyObstacles(x, y);
     for (var q = 0; q < obs.length; q++) { var o = obs[q]; if (x > o.x - pad && x < o.x + o.w + pad && y > o.y - pad && y < o.y + o.h + pad) return true; }
     return false;
@@ -930,6 +940,7 @@
     m.x += m.vx * dt; m.y += m.vy * dt;
     var obstacles = queryNearbyObstacles(m.x, m.y);
     for (var k = 0; k < obstacles.length; k++) resolveCircleAabb(m, obstacles[k]);
+    if (TERR) TERR.push(m);
     if (m.vx !== 0 || m.vy !== 0) m.facing = Math.atan2(m.vy, m.vx);
     m.runCycle += dt * (Math.sqrt(m.vx * m.vx + m.vy * m.vy) / 24 + 0.3);
   }
@@ -1976,8 +1987,42 @@
     }
   }
 
+  // v17 地形瓦片（离屏缓存；每帧最多预取 1 张）
+  var terrImgsReady = false;
+  function drawTerrain() {
+    if (!TERR) return;
+    if (!terrImgsReady && IMG.rock && IMG.bush) { terrImgsReady = true; TERR.clear(); }
+    var T = TERR.TILE, hw = W / (2 * SCALE), hh = H / (2 * SCALE), p = SCALE * DPR;
+    var i0 = Math.floor((camera.x - hw) / T), i1 = Math.floor((camera.x + hw) / T), j0 = Math.floor((camera.y - hh) / T), j1 = Math.floor((camera.y + hh) / T);
+    var imgs = terrImgsReady ? { rock: IMG.rock, bush: IMG.bush } : null, bg = tileGrassBg;
+    for (var j = j0; j <= j1; j++) for (var i = i0; i <= i1; i++) {
+      var c = TERR.getTile(i, j, p, imgs, bg); if (!c) continue;
+      var sx = Math.floor(worldToScreenX(i * T)), sy = Math.floor(worldToScreenY(j * T)), sz = Math.ceil(T * SCALE) + 1;
+      ctx.drawImage(c, sx, sy, sz, sz);
+    }
+    var pi = Math.floor((camera.x + (moveDir.x || 0) * (hw + T * 0.5)) / T), pj = Math.floor((camera.y + (moveDir.y || 0) * (hh + T * 0.5)) / T), done = false;
+    for (var dj = -1; dj <= 1 && !done; dj++) for (var di = -1; di <= 1 && !done; di++) if (!TERR.has(pi + di, pj + dj, p)) { TERR.getTile(pi + di, pj + dj, p, imgs, bg); done = true; }
+    if (resScale >= 1 && dayNow.night < 0.3 && !reducedMotion) { // 水面波光（弱设备 / 夜晚 关闭）
+      var P = TERR.PTS, t = elapsedPlayTime || 0, any = false; ctx.strokeStyle = "rgba(255,255,255,0.5)"; ctx.lineWidth = Math.max(1, 2.2 * SCALE); ctx.lineCap = "round"; ctx.beginPath();
+      for (var k = 1; k < P.length - 1; k += 2) { var x = P[k][0], y = P[k][1]; if (x < camera.x - hw - 80 || x > camera.x + hw + 80 || y < camera.y - hh - 80 || y > camera.y + hh + 80) continue;
+        var q = P[k + 1], L = Math.hypot(q[0] - x, q[1] - y) || 1, tx = (q[0] - x) / L, ty = (q[1] - y) / L, hwk = TERR.hwAt(k);
+        if (TERR.inCross(x, y, -40)) continue;
+        for (var m = 0; m < 2; m++) { var ph = (t * 0.35 + k * 0.37 + m * 0.5) % 1, off = Math.sin(k * 1.7 + m * 2.3) * hwk * 0.55, along = (ph - 0.5) * L * 1.6;
+          var ax = x + tx * along - ty * off, ay = y + ty * along + tx * off; ctx.moveTo(worldToScreenX(ax), worldToScreenY(ay)); ctx.lineTo(worldToScreenX(ax + tx * 14), worldToScreenY(ay + ty * 14)); any = true; } }
+      if (any) ctx.stroke();
+    }
+  }
+  // 草地底图烘焙进地形瓦片（与 drawGround 同样的贴图/对齐）
+  var tileGrassCv = null, tileDapple = null;
+  function tileGrassBg(g, x0, y0, T) {
+    if (!tileGrassCv) { tileGrassCv = makeGrass(2); tileDapple = makeDapple(); }
+    var pat = g.createPattern(tileGrassCv, "repeat"); if (pat.setTransform && window.DOMMatrix) pat.setTransform(new DOMMatrix([0.5, 0, 0, 0.5, 0, 0]));
+    g.fillStyle = pat; g.fillRect(x0, y0, T, T);
+    var dp = g.createPattern(tileDapple, "repeat"); if (dp.setTransform && window.DOMMatrix) { dp.setTransform(new DOMMatrix([4, 0, 0, 4, 0, 0])); g.fillStyle = dp; g.fillRect(x0, y0, T, T); }
+  }
   function drawBackground() {
-    drawGround();
+    if (!TERR || !window.DOMMatrix) drawGround();
+    drawTerrain();
     forEachVisibleChunk(function (chunk) {
       for (var i = 0; i < chunk.decor.length; i++) drawDecor(chunk.decor[i]);
     });
@@ -3407,6 +3452,7 @@
   function nestSpotOk(x, y, spacing, minCat) {
     if (nearEdge(x, y, NEST_EDGE)) return false;
     if (Math.sqrt(x * x + y * y) < NEST_MIN_SPAWN_D) return false;
+    if (TERR && (TERR.blocked(x, y, 120) || !TERR.reachable(x, y) || TERR.inCross(x, y, -150))) return false; // v17：只在草地、可达、离桥头远
     if (minCat && distance(x, y, cat.x, cat.y) < minCat) return false;
     for (var i = 0; i < nests.length; i++) if (nests[i].alive && distance(x, y, nests[i].x, nests[i].y) < spacing) return false;
     var c = worldToChunk(x, y); for (var dy = -1; dy <= 1; dy++) for (var dx = -1; dx <= 1; dx++) getChunk(c.cx + dx, c.cy + dy);
@@ -3718,11 +3764,12 @@
   }
   // ---- 小地图 ----
   var miniT = 0;
+  var miniBase = null;
   function drawMiniTo(c, size) {
     var g = c.getContext("2d"), d = Math.min(2, window.devicePixelRatio || 1); if (c.width !== size * d) { c.width = size * d; c.height = size * d; }
     g.setTransform(d, 0, 0, d, 0, 0); g.clearRect(0, 0, size, size);
     var k = size / (2 * MAP_HALF), X = function (x) { return (x + MAP_HALF) * k; };
-    g.fillStyle = "#b8e6a0"; g.fillRect(0, 0, size, size);
+    if (TERR) { if (!miniBase || miniBase.width !== Math.round(size * d)) miniBase = TERR.miniMap(Math.round(size * d)); g.drawImage(miniBase, 0, 0, size, size); } else { g.fillStyle = "#b8e6a0"; g.fillRect(0, 0, size, size); }
     if (dayNow.night > 0) { g.fillStyle = "rgba(10,15,50," + (0.4 * dayNow.night) + ")"; g.fillRect(0, 0, size, size); }
     for (var i = 0; i < nests.length; i++) { var n = nests[i]; if (n.alive) { g.fillStyle = n.flash > 0 ? "#ffd23f" : "#a0683a"; g.beginPath(); g.arc(X(n.x), X(n.y), Math.max(3, size / 30), 0, 7); g.fill(); } else { g.strokeStyle = "#8a8a8a"; g.lineWidth = 1.5; var q = size / 40; g.beginPath(); g.moveTo(X(n.x) - q, X(n.y) - q); g.lineTo(X(n.x) + q, X(n.y) + q); g.moveTo(X(n.x) + q, X(n.y) - q); g.lineTo(X(n.x) - q, X(n.y) + q); g.stroke(); } }
     var hw = W / (2 * SCALE), hh = H / (2 * SCALE); g.strokeStyle = "rgba(122,74,42,.6)"; g.lineWidth = 1.2; g.strokeRect(X(camera.x - hw), X(camera.y - hh), 2 * hw * k, 2 * hh * k);
@@ -3798,7 +3845,7 @@
     var prev = L.done; L.t += dt; var k = Math.min(1, L.t / L.dur), e = 1 - (1 - k) * (1 - k);
     var step = L.len * e - prev; L.done = L.len * e;
     cat.x += L.ux * step; cat.y += L.uy * step;
-    var obs = queryNearbyObstacles(cat.x, cat.y); for (var i = 0; i < obs.length; i++) resolveCircleAabb(cat, obs[i]);
+    var obs = queryNearbyObstacles(cat.x, cat.y); for (var i = 0; i < obs.length; i++) resolveCircleAabb(cat, obs[i]); if (TERR) TERR.push(cat);
     if (L.chain && !reducedMotion && Math.random() < 0.6) uni.ghosts.push({ x: cat.x, y: cat.y, a: 0.45 });
   }
   function uniOnCapture(m) {
@@ -4154,7 +4201,7 @@
     turn: function () { if (ab) ab.turnAcc = Math.PI; },
     obstaclesNear: function () { return queryNearbyObstacles(cat.x, cat.y).map(function (o) { return { x: o.x - cat.x, y: o.y - cat.y, w: o.w, h: o.h }; }); },
     get catScreen() { return { x: worldToScreenX(cat.x), y: worldToScreenY(cat.y) }; },
-    teleport: function (x, y) { cat.x = x; cat.y = y; camera.x = x; camera.y = y; },
+    teleport: function (x, y) { cat.x = x; cat.y = y; if (TERR) TERR.push(cat); camera.x = x; camera.y = y; },
     setMove: function (x, y) { moveDir.x = x; moveDir.y = y; },
     stepSim: function (sec) { var n = Math.round(sec * 60); for (var i = 0; i < n; i++) update(1 / 60); },
     selectSkin: selectSkin,
