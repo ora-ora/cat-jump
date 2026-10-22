@@ -940,7 +940,15 @@
     m.x += m.vx * dt; m.y += m.vy * dt;
     var obstacles = queryNearbyObstacles(m.x, m.y);
     for (var k = 0; k < obstacles.length; k++) resolveCircleAabb(m, obstacles[k]);
-    if (TERR) TERR.push(m);
+    if (TERR) { var px0 = m.x, py0 = m.y;
+      if (TERR.push(m)) { // v18：撞到河岸/山崖 → 把“顶墙”的速度转成沿岸滑行（不在岸边原地卡住）
+        var nx = m.x - px0, ny = m.y - py0, nl = Math.sqrt(nx * nx + ny * ny);
+        if (nl > 1e-4) { nx /= nl; ny /= nl; var vn = m.vx * nx + m.vy * ny;
+          if (vn < 0) { var tx = -ny, ty = nx, vt = m.vx * tx + m.vy * ty;
+            if (!(m.tsgT > 0)) { m.tsg = Math.abs(vt) > 4 ? (vt > 0 ? 1 : -1) : (m.seed < 0.5 ? 1 : -1); }
+            m.tsgT = 1.2; var sp2 = Math.sqrt(m.vx * m.vx + m.vy * m.vy);
+            m.vx = tx * m.tsg * sp2; m.vy = ty * m.tsg * sp2; m.x += m.vx * dt * 0.5; m.y += m.vy * dt * 0.5; TERR.push(m); } } }
+      if (m.tsgT > 0) m.tsgT -= dt; }
     if (m.vx !== 0 || m.vy !== 0) m.facing = Math.atan2(m.vy, m.vx);
     m.runCycle += dt * (Math.sqrt(m.vx * m.vx + m.vy * m.vy) / 24 + 0.3);
   }
@@ -1991,10 +1999,10 @@
   var terrImgsReady = false;
   function drawTerrain() {
     if (!TERR) return;
-    if (!terrImgsReady && IMG.rock && IMG.bush) { terrImgsReady = true; TERR.clear(); }
+    if (!terrImgsReady && IMG.rock && IMG.bush && IMG.bridge && IMG.ford) { terrImgsReady = true; TERR.clear(); }
     var T = TERR.TILE, hw = W / (2 * SCALE), hh = H / (2 * SCALE), p = SCALE * DPR;
     var i0 = Math.floor((camera.x - hw) / T), i1 = Math.floor((camera.x + hw) / T), j0 = Math.floor((camera.y - hh) / T), j1 = Math.floor((camera.y + hh) / T);
-    var imgs = terrImgsReady ? { rock: IMG.rock, bush: IMG.bush } : null, bg = tileGrassBg;
+    var imgs = terrImgsReady ? { rock: IMG.rock, bush: IMG.bush, bridge: IMG.bridge, ford: IMG.ford } : null, bg = tileGrassBg;
     for (var j = j0; j <= j1; j++) for (var i = i0; i <= i1; i++) {
       var c = TERR.getTile(i, j, p, imgs, bg); if (!c) continue;
       var sx = Math.floor(worldToScreenX(i * T)), sy = Math.floor(worldToScreenY(j * T)), sz = Math.ceil(T * SCALE) + 1;
@@ -2262,7 +2270,7 @@
   var IMG = {}, IMG_LIST = [];
   ["orange", "black", "white", "calico", "blue", "siamese"].forEach(function (k) { IMG_LIST.push(k + "_front", k + "_side", k + "_back"); });
   ["grey", "brown", "gold"].forEach(function (k) { IMG_LIST.push("m_" + k + "_front", "m_" + k + "_side", "m_" + k + "_back"); });
-  IMG_LIST.push("nest", "nest_dead", "poop", "crate", "bush", "rock", "tree", "tree_fruit", "flowerbed", "stones", "fence", "grass");
+  IMG_LIST.push("bridge", "ford", "nest", "nest_dead", "poop", "crate", "bush", "rock", "tree", "tree_fruit", "flowerbed", "stones", "fence", "grass");
   var imgLoaded = 0;
   // v15：跑步帧按需加载（只加载当前选中的猫），并测量每帧最低爪子到帧底的距离 → 把爪子钉在地面线上
   var runReq = {}, FOOT = {};
@@ -4160,7 +4168,7 @@
     get state() { return state; },
     get cat() { return { x: cat.x, y: cat.y, vx: cat.vx, vy: cat.vy }; },
     get camera() { return { x: camera.x, y: camera.y }; },
-    get mice() { return mice.map(function (m) { return { x: m.x, y: m.y, type: m.type, state: m.state, beh: m.beh, under: !!m.under, asleep: !!m.asleep, leader: !!m.leader, packId: m.packId || 0, stun: m.stun > 0 }; }); },
+    get mice() { return mice.map(function (m) { return { id: m.seed, x: m.x, y: m.y, type: m.type, state: m.state, beh: m.beh, under: !!m.under, asleep: !!m.asleep, leader: !!m.leader, packId: m.packId || 0, stun: m.stun > 0 }; }); },
     get behCounts() { var c = {}; mice.forEach(function (m) { c[m.beh] = (c[m.beh] || 0) + 1; }); return c; },
     get aimLog() { return aimLog.slice(); },
     get planLog() { return planLog.slice(); },

@@ -37,8 +37,16 @@
   // 湖（左下）
   var LAKE = { x: -960, y: 960, rx: 330, ry: 235 };
   // 山（右上大山 + 两个小丘）：圆的并集
-  var ROCKS = [[1130, -1130, 330], [820, -1260, 210], [1290, -820, 230], [940, -900, 160], [1270, -1330, 200], [1380, -1080, 200],
-               [-1020, -120, 120], [-1110, -40, 90], [330, 1030, 135], [450, 1110, 95]];
+  // 山丘：有机轮廓（径向噪声多边形）。右上大山由 3 块组成，中间留 2 条窄山道
+  var HILLS = [
+    { x: 790, y: -1130, R: 252, p: [0.3, 1.7, 2.9, 4.1] },
+    { x: 1330, y: -1320, R: 208, p: [2.2, 0.4, 5.0, 1.1] },
+    { x: 1290, y: -740, R: 258, p: [4.4, 2.6, 0.9, 3.3] },
+    { x: -1040, y: -100, R: 130, p: [1.0, 3.1, 2.0, 0.2] },
+    { x: 380, y: 1060, R: 145, p: [5.1, 1.2, 3.7, 2.4] }
+  ];
+  function hillR(h, a) { return h.R * (1 + 0.10 * Math.sin(2 * a + h.p[0]) + 0.06 * Math.sin(3 * a + h.p[1]) + 0.04 * Math.sin(5 * a + h.p[2]) + 0.025 * Math.sin(8 * a + h.p[3])); }
+  var ROCKS = HILLS.map(function (h) { return [h.x, h.y, h.R * 1.25]; }); // 只用于可见性/粗判断
   function inCross(x, y, pad) {
     for (var k = 0; k < CROSS.length; k++) { var c = CROSS[k], a = (x - c.x) * c.tx + (y - c.y) * c.ty; if (Math.abs(a) < c.w / 2 - pad) { var b = -(x - c.x) * c.ty + (y - c.y) * c.tx; if (Math.abs(b) < c.hw + 60) return c; } }
     return null;
@@ -48,7 +56,7 @@
     m = m || 0;
     var r = nearestRiver(x, y); if (r.d < r.hw + m && !inCross(x, y, 0)) return true;
     var lx = (x - LAKE.x) / (LAKE.rx + m), ly = (y - LAKE.y) / (LAKE.ry + m); if (lx * lx + ly * ly < 1) return true;
-    for (var i = 0; i < ROCKS.length; i++) { var c = ROCKS[i], dx = x - c[0], dy = y - c[1], R = c[2] + m; if (dx * dx + dy * dy < R * R) return true; }
+    for (var i = 0; i < HILLS.length; i++) { var h = HILLS[i], dx = x - h.x, dy = y - h.y, d2 = dx * dx + dy * dy, lim = h.R * 1.25 + m; if (d2 < lim * lim && Math.sqrt(d2) < hillR(h, Math.atan2(dy, dx)) + m) return true; }
     return false;
   }
   // 圆形实体推出地形（沿岸滑行：只沿法线推出，切向速度保留）
@@ -72,7 +80,7 @@
       }
       var lx = o.x - LAKE.x, ly = o.y - LAKE.y, n = Math.sqrt(lx * lx / ((LAKE.rx + r0) * (LAKE.rx + r0)) + ly * ly / ((LAKE.ry + r0) * (LAKE.ry + r0)));
       if (n < 1) { if (n < 0.001) { lx = 1; n = 1 / (LAKE.rx + r0); } o.x = LAKE.x + lx / n; o.y = LAKE.y + ly / n; moved = true; }
-      for (var i = 0; i < ROCKS.length; i++) { var q = ROCKS[i], dx = o.x - q[0], dy = o.y - q[1], R = q[2] + r0, d2 = dx * dx + dy * dy; if (d2 < R * R) { var d = Math.sqrt(d2) || 1; o.x = q[0] + dx / d * R; o.y = q[1] + dy / d * R; moved = true; } }
+      for (var i = 0; i < HILLS.length; i++) { var h = HILLS[i], dx = o.x - h.x, dy = o.y - h.y, d = Math.sqrt(dx * dx + dy * dy); if (d < h.R * 1.25 + r0) { var hr = hillR(h, Math.atan2(dy, dx)) + r0; if (d < hr) { d = d || 1; o.x = h.x + dx / d * hr; o.y = h.y + dy / d * hr; moved = true; } } }
       if (!moved) break; hit = true;
     }
     return hit;
@@ -139,7 +147,14 @@
     for (var k = 0; k < CROSS.length; k++) {
       var c = CROSS[k]; g.save(); g.translate(c.x, c.y); g.rotate(Math.atan2(c.ty, c.tx));
       var len = c.hw + 34;
-      if (c.kind === "bridge") {
+      if (c.kind === "bridge" && imgs && imgs.bridge) { // 手绘木桥精灵（桥面沿过河方向）
+        var bwI = c.w + 26, blI = 2 * len + 22; g.fillStyle = "rgba(30,60,80,.28)"; g.fillRect(-c.w / 2 + 8, -len + 10, c.w, 2 * len);
+        g.drawImage(imgs.bridge, -bwI / 2, -blI / 2, bwI, blI);
+      } else if (c.kind === "ford" && imgs && imgs.ford) {
+        var fh = imgs.ford.height / 5;
+        for (var st = -len + 16, si2 = 0; st < len - 8; st += 30, si2++) { var jx = (R() - 0.5) * c.w * 0.35, sr = 40 + R() * 10; ell(g, jx + 3, st + 4, sr * 0.48, sr * 0.36, "rgba(40,70,90,.35)");
+          g.drawImage(imgs.ford, 0, (si2 % 5) * fh, imgs.ford.width, fh, jx - sr / 2, st - sr * 0.45, sr, sr * fh / imgs.ford.width); }
+      } else if (c.kind === "bridge") {
         var bw = c.w / 2;
         g.fillStyle = "rgba(30,60,80,.3)"; g.fillRect(-bw + 6, -len + 8, 2 * bw, 2 * len);
         g.fillStyle = "#b9814e"; g.fillRect(-bw, -len, 2 * bw, 2 * len);
@@ -151,20 +166,23 @@
       }
       g.restore();
     }
-    // 5) 山丘：投影 → 崖壁（南侧可见的岩面带竖向裂纹）→ 草顶 → 岩块/灌木
-    for (i = 0; i < ROCKS.length; i++) { var o = ROCKS[i]; ell(g, o[0] + 16, o[1] + 26, o[2] + 6, o[2] * 0.96, "rgba(40,70,30,.30)"); }
-    for (i = 0; i < ROCKS.length; i++) { o = ROCKS[i]; ell(g, o[0], o[1], o[2] + 3, o[2] + 3, "#4f5a52"); ell(g, o[0], o[1] - 2, o[2], o[2], "#7d8a80"); }
+    // 5) 山丘（有机轮廓）：投影 → 崖壁（南侧岩面 + 竖向裂纹）→ 深色描边 → 草顶 → 岩块/灌木
+    function hillPath(h, k, ox, oy, sy) { g.beginPath(); for (var n = 0; n <= 96; n++) { var a = n / 96 * 6.2832, r = hillR(h, a) * k; var px = h.x + ox + Math.cos(a) * r, py = h.y + oy + Math.sin(a) * r * (sy || 1); if (n) g.lineTo(px, py); else g.moveTo(px, py); } g.closePath(); }
+    var hv = HILLS.map(function (h) { return vis(h.x, h.y, h.R * 1.3 + 40); });
+    for (i = 0; i < HILLS.length; i++) if (hv[i]) { var h = HILLS[i]; hillPath(h, 1.02, 16, 24); g.fillStyle = "rgba(40,70,30,.28)"; g.fill(); }
+    for (i = 0; i < HILLS.length; i++) if (hv[i]) { h = HILLS[i]; hillPath(h, 1, 0, 0); g.fillStyle = "#6f7c72"; g.fill(); g.lineWidth = 5; g.strokeStyle = "#3b463e"; g.stroke(); }
     g.lineCap = "round";
-    for (i = 0; i < ROCKS.length; i++) { o = ROCKS[i]; R = rr(555 + i * 97); if (!vis(o[0], o[1], o[2] + 40)) continue;
-      for (var aa0 = 0.15; aa0 < 3.0; aa0 += 0.16) { var cx0 = o[0] + Math.cos(aa0) * o[2] * 0.97, cy0 = o[1] + Math.sin(aa0) * o[2] * 0.97, len0 = o[2] * (0.16 + R() * 0.1);
-        g.strokeStyle = R() < 0.5 ? "rgba(50,58,52,.55)" : "rgba(170,180,172,.55)"; g.lineWidth = 3 + R() * 3; g.beginPath(); g.moveTo(cx0, cy0); g.lineTo(cx0 + (R() - 0.5) * 6, cy0 - len0); g.stroke(); } }
-    for (i = 0; i < ROCKS.length; i++) { o = ROCKS[i]; ell(g, o[0], o[1] - o[2] * 0.2, o[2] * 0.93, o[2] * 0.78, "#3f7a35"); }
-    for (i = 0; i < ROCKS.length; i++) { o = ROCKS[i]; ell(g, o[0], o[1] - o[2] * 0.22, o[2] * 0.9, o[2] * 0.75, "#86c862"); ell(g, o[0] - o[2] * 0.15, o[1] - o[2] * 0.32, o[2] * 0.6, o[2] * 0.46, "#9bd674"); }
-    for (i = 0; i < ROCKS.length; i++) { o = ROCKS[i]; R = rr(777 + i * 131); if (!vis(o[0], o[1], o[2] + 60)) continue; var nR = Math.round(o[2] / 22);
-      for (var j = 0; j < nR; j++) { var aa = 0.1 + R() * 2.9, rx2 = o[0] + Math.cos(aa) * o[2] * 0.9, ry2 = o[1] + Math.sin(aa) * o[2] * 0.9;
-        if (imgs && imgs.rock) { var rw = 40 + R() * 36; g.drawImage(imgs.rock, rx2 - rw / 2, ry2 - rw * 0.7, rw, rw * imgs.rock.height / imgs.rock.width); } else ell(g, rx2, ry2, 14, 10, "#a3ada6"); }
-      for (j = 0; j < Math.max(1, nR / 2); j++) { aa = R() * 6.28; var rd2 = 0.2 + R() * 0.45, bw2 = 46 + R() * 26, bxx = o[0] + Math.cos(aa) * o[2] * rd2, byy = o[1] - o[2] * 0.25 + Math.sin(aa) * o[2] * rd2 * 0.7;
-        if (imgs && R() < 0.35 && imgs.rock) g.drawImage(imgs.rock, bxx - bw2 / 2, byy - bw2 / 2, bw2, bw2 * imgs.rock.height / imgs.rock.width);
+    for (i = 0; i < HILLS.length; i++) { h = HILLS[i]; R = rr(555 + i * 97); if (!hv[i]) continue;
+      for (var aa0 = 0.12; aa0 < 3.05; aa0 += 0.07) { var rr0 = hillR(h, aa0), cx0 = h.x + Math.cos(aa0) * rr0 * 0.97, cy0 = h.y + Math.sin(aa0) * rr0 * 0.97, len0 = h.R * (0.12 + R() * 0.1) * Math.sin(aa0);
+        g.strokeStyle = R() < 0.5 ? "rgba(45,52,47,.55)" : "rgba(175,185,176,.6)"; g.lineWidth = 2.5 + R() * 3; g.beginPath(); g.moveTo(cx0, cy0 - 3); g.lineTo(cx0 + (R() - 0.5) * 5, cy0 - 3 - len0); g.stroke(); } }
+    for (i = 0; i < HILLS.length; i++) if (hv[i]) { h = HILLS[i]; hillPath(h, 0.9, 0, -h.R * 0.17, 0.86); g.fillStyle = "#3f7a35"; g.fill(); }
+    for (i = 0; i < HILLS.length; i++) if (hv[i]) { h = HILLS[i]; hillPath(h, 0.87, 0, -h.R * 0.19, 0.84); g.fillStyle = "#86c862"; g.fill(); hillPath(h, 0.6, -h.R * 0.1, -h.R * 0.3, 0.75); g.fillStyle = "#9bd674"; g.fill();
+      hillPath(h, 0.87, 0, -h.R * 0.19, 0.84); g.lineWidth = 3; g.strokeStyle = "#2f6328"; g.stroke(); }
+    for (i = 0; i < HILLS.length; i++) { h = HILLS[i]; R = rr(777 + i * 131); if (!hv[i]) continue; var nR = Math.round(h.R / 20);
+      for (var j = 0; j < nR; j++) { var aa = 0.15 + R() * 2.85, rra = hillR(h, aa), rx2 = h.x + Math.cos(aa) * rra * 0.93, ry2 = h.y + Math.sin(aa) * rra * 0.93;
+        if (imgs && imgs.rock) { var rw = 38 + R() * 34; g.drawImage(imgs.rock, rx2 - rw / 2, ry2 - rw * 0.72, rw, rw * imgs.rock.height / imgs.rock.width); } else { R(); ell(g, rx2, ry2, 14, 10, "#a3ada6"); } }
+      for (j = 0; j < Math.max(2, nR / 2); j++) { aa = R() * 6.28; var rd2 = 0.15 + R() * 0.5, bw2 = 44 + R() * 26, bxx = h.x + Math.cos(aa) * h.R * rd2, byy = h.y - h.R * 0.22 + Math.sin(aa) * h.R * rd2 * 0.7, pick = R();
+        if (imgs && pick < 0.3 && imgs.rock) g.drawImage(imgs.rock, bxx - bw2 / 2, byy - bw2 / 2, bw2, bw2 * imgs.rock.height / imgs.rock.width);
         else if (imgs && imgs.bush) g.drawImage(imgs.bush, bxx - bw2 / 2, byy - bw2 / 2, bw2, bw2 * imgs.bush.height / imgs.bush.width); }
     }
     R = rr(2004);
@@ -201,9 +219,9 @@
     var c = document.createElement("canvas"); c.width = c.height = size; var g = c.getContext("2d"), k = size / (2 * HALF);
     g.scale(k, k); g.translate(HALF, HALF); g.fillStyle = "#b8e6a0"; g.fillRect(-HALF, -HALF, 2 * HALF, 2 * HALF);
     riverStroke(g, 0, "#6cc0ea"); ell(g, LAKE.x, LAKE.y, LAKE.rx, LAKE.ry, "#6cc0ea");
-    for (var i = 0; i < ROCKS.length; i++) ell(g, ROCKS[i][0], ROCKS[i][1], ROCKS[i][2], ROCKS[i][2], "#8e9a91");
+    for (var i = 0; i < HILLS.length; i++) { var h = HILLS[i]; g.beginPath(); for (var n = 0; n <= 64; n++) { var a = n / 64 * 6.2832, r = hillR(h, a); g.lineTo(h.x + Math.cos(a) * r, h.y + Math.sin(a) * r); } g.closePath(); g.fillStyle = "#8e9a91"; g.fill(); g.lineWidth = 14; g.strokeStyle = "#5d6a60"; g.stroke(); }
     g.fillStyle = "#b9814e"; for (i = 0; i < CROSS.length; i++) ell(g, CROSS[i].x, CROSS[i].y, 40, 40, CROSS[i].kind === "bridge" ? "#b9814e" : "#cbbf9e");
     return c;
   }
-  window.CatTerrain = { clear: function () { tileCache.clear(); }, has: function (ti, tj, p) { return tileCache.has(ti + "," + tj + "@" + Math.round(p * 20) / 20); }, HALF: HALF, TILE: TILE, blocked: blocked, push: push, reachable: reachable, buildReach: buildReach, getTile: getTile, miniMap: miniMap, nearestRiver: nearestRiver, CROSS: CROSS, PTS: PTS, LAKE: LAKE, ROCKS: ROCKS, hwAt: hwAt, inCross: inCross };
+  window.CatTerrain = { clear: function () { tileCache.clear(); }, has: function (ti, tj, p) { return tileCache.has(ti + "," + tj + "@" + Math.round(p * 20) / 20); }, HALF: HALF, TILE: TILE, blocked: blocked, push: push, reachable: reachable, buildReach: buildReach, getTile: getTile, miniMap: miniMap, nearestRiver: nearestRiver, CROSS: CROSS, PTS: PTS, LAKE: LAKE, ROCKS: ROCKS, HILLS: HILLS, hillR: hillR, hwAt: hwAt, inCross: inCross };
 })();
