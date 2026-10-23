@@ -3258,7 +3258,7 @@
     hideScreen(dom.resultScreen);
     hideScreen(dom.confirmEndScreen);
     dom.bestScoreStart.textContent = String(best);
-    dom.nicknameInput.value = storageGet("catmouse_nickname", "");
+    dom.nicknameInput.value = ensureSavedNickname();
     dom.nicknameHint.classList.add("hidden");
     showScreen(dom.startScreen);
   }
@@ -4597,9 +4597,10 @@
 
 
   // ---- 皮肤选择 & 随机昵称 ----
-  var RANDOM_NAME_ADJ = ["软糯", "奶呼呼", "元气", "迷糊", "毛茸茸", "甜甜", "圆滚滚", "小懒", "暖乎乎", "胖嘟嘟", "香喷喷", "蓬松", "乖巧", "呆萌", "爱睡", "小跳跳"];
-  var RANDOM_NAME_NOUN = ["小团子", "布丁", "汤圆", "麻薯", "饭团", "奶糖", "年糕", "鱼干", "棉花糖", "豆包", "糯米糍", "小橘", "奶盖", "芝麻球", "毛线球", "泡芙"];
-  var RANDOM_NAME_SUFFIX = ["", "", "", "喵", "酱"];
+  // 形容词 + 猫/零食/小动物名词 + 可选后缀；组合数足够多，首次打开也能感觉「像专属」
+  var RANDOM_NAME_ADJ = ["软糯", "奶呼呼", "元气", "迷糊", "毛茸茸", "甜甜", "圆滚滚", "小懒", "暖乎乎", "胖嘟嘟", "香喷喷", "蓬松", "乖巧", "呆萌", "爱睡", "小跳跳", "机灵", "呼噜", "懒洋洋", "亮晶晶", "粉扑扑", "小淘气"];
+  var RANDOM_NAME_NOUN = ["小团子", "布丁", "汤圆", "麻薯", "饭团", "奶糖", "年糕", "鱼干", "棉花糖", "豆包", "糯米糍", "小橘", "奶盖", "芝麻球", "毛线球", "泡芙", "小猫", "橘猫", "狸花", "喵星人", "爪爪", "小鱼", "松子", "豆豆"];
+  var RANDOM_NAME_SUFFIX = ["", "", "喵", "酱", "仔"];
   function allRandomNames() {
     var out = [];
     for (var a = 0; a < RANDOM_NAME_ADJ.length; a++)
@@ -4622,6 +4623,14 @@
       if (name !== lastRandomName && randomNameOk(name)) { lastRandomName = name; return name; }
     }
     return "软糯小团子";
+  }
+  // 首次打开（本地无昵称）自动生成并写入；已有则不覆盖，输入框仍可改 / 可点骰子重随
+  function ensureSavedNickname() {
+    var saved = (storageGet("catmouse_nickname", "") || "").trim();
+    if (saved) return saved;
+    var name = randomCuteName();
+    storageSet("catmouse_nickname", name);
+    return name;
   }
 
   var skinGrid = document.getElementById("skinGrid");
