@@ -482,7 +482,7 @@
     tap = { x0: e.clientX, y0: e.clientY, t0: nowMs(), drag: false };
     if (dom && dom.hud) dom.hud.classList.add("steering");
     var dir = computeDirFromPoint(e.clientX, e.clientY); // 降延迟：按下当帧就朝手指起步
-    if (dir && !(sig && sig.go)) { moveDir.x = dir.x; moveDir.y = dir.y; }
+    if (dir && !(sig && sig.go) && !bioCatStunned()) { moveDir.x = dir.x; moveDir.y = dir.y; }
   }
   function toDrag() { if (!tap || tap.drag) return; tap.drag = true; clearTargets(); }
   function onPointerMove(e) {
@@ -673,7 +673,7 @@
   }
 
   function resetScoring() {
-    uniReset(); sigReset(); clearTargets(); score = 0; catches = 0; catchesGrey = 0; catchesBrown = 0; catchesGold = 0; missionsInit();
+    uniReset(); sigReset(); clearTargets(); bioReset(); score = 0; catches = 0; catchesGrey = 0; catchesBrown = 0; catchesGold = 0; missionsInit();
     combo = 0; comboTimer = 0; comboMax = 0; elapsedPlayTime = 0; hitStopT = 0; hitStopCd = 0; impacts.length = 0; flyers.length = 0; comboBanner = null; comboRings.length = 0;
   }
 
@@ -867,12 +867,24 @@
       stepMouse(m, sdt, dToCat, i);
       if (m.under) continue;
       var dAfter = distance(m.x, m.y, cat.x, cat.y);
-      if (dAfter < cat.r + m.r + sigCatchBonus() && !(sig && sig.hide)) { onCapture(m); recycleMouse(i); }
+      if (dAfter < cat.r + m.r + sigCatchBonus() && !(sig && sig.hide)) { if (tryHitMouse(m)) { onCapture(m); recycleMouse(i); } }
     }
   }
 
   function stepMouse(m, dt, dToCat, i) {
     var esm = entityScaleMult;
+    if (m.mutant && m.biting) { // v21：咬击蓄力时强制冲向猫，不被逃跑 AI 打断
+      var dx = cat.x - m.x, dy = cat.y - m.y, d = Math.sqrt(dx * dx + dy * dy) || 1;
+      var sp = (m.speed || 120) * 2.4; m.vx = dx / d * sp; m.vy = dy / d * sp; m.state = "wander";
+      m.x += m.vx * dt; m.y += m.vy * dt; if (TERR) TERR.push(m);
+      if (m.vx || m.vy) m.facing = Math.atan2(m.vy, m.vx);
+      m.runCycle += dt * 2; return;
+    }
+    if (m.mutant && m.infectTarget && m.infectTarget.alive && !m.infectTarget.infected && dToCat > BIO_BITE_R) {
+      // 无猫威胁时优先跑向要感染的窝
+      var n = m.infectTarget, dx2 = n.x - m.x, dy2 = n.y - m.y, d2 = Math.sqrt(dx2 * dx2 + dy2 * dy2) || 1;
+      if (d2 > 20) { var sp2 = (m.speed || 120) * 1.15; m.vx = dx2 / d2 * sp2; m.vy = dy2 / d2 * sp2; }
+    }
     if (m.excl > 0) m.excl -= dt;
     if (m.tpCd > 0) m.tpCd -= dt;
     if (m.panicIn > 0) { m.panicIn -= dt; if (m.panicIn <= 0) startFlee(m, m.panicDepth || 1); }
@@ -1016,6 +1028,7 @@
     catches += 1;
     uniOnCapture(m);
     sigOnCapture(m);
+    onMutantCaptureBonus(m);
     if (m.type === "grey") catchesGrey++;
     else if (m.type === "brown") catchesBrown++;
     else catchesGold++;
@@ -2602,6 +2615,7 @@
       if (m.asleep) st = ["sit", 2];
       if (dayNow.night > 0.5 && mouseInDark(m)) { var ea = 0.5 + 0.5 * dayNow.night; var blk = Math.sin(elapsedPlayTime * 2.3 + m.seed * 11) > 0.96; if (!blk) { var gw = glowSprite(), gs = s(9); if (resScale >= 1) { ctx.globalAlpha = ea; ctx.drawImage(gw, sx - 5 * u - gs / 2, sy - 8 * u - gs / 2, gs, gs); ctx.drawImage(gw, sx + 5 * u - gs / 2, sy - 8 * u - gs / 2, gs, gs); ctx.globalAlpha = 1; } ctx.fillStyle = "#fff8c0"; ctx.beginPath(); ctx.arc(sx - 5 * u, sy - 8 * u, s(1.6), 0, 7); ctx.arc(sx + 5 * u, sy - 8 * u, s(1.6), 0, 7); ctx.fill(); } continue; }
       if (!dbgDraw.noSprite && !paintedMouse(m.type, sx + ox, sy, u, d[0], d[1], st, m.runCycle)) blit(ANIM.mouseSprite(m.type, d[0], st[0], st[1], spritePx(u)), sx + ox, sy, u, d[1]);
+      drawMutantTint(m, sx + ox, sy, u);
       if (!dbgDraw.noTell && (v.full || m.type === "gold" || m.packId)) drawTell(m, sx + ox, sy, u, st, v.full, v.i);
     }
   }
@@ -3548,12 +3562,12 @@
     nests.length = 0; poops.length = 0; nestStats.destroyed = 0; poopSit.t = 0; poopSit.nest = null; nestAddT = 0;
     for (var i = 0; i < NEST_START; i++) { var p = placeNest(0); if (p) nests.push(newNest(p)); }
   }
-  function newNest(p) { return { x: p.x, y: p.y, alive: true, t: Math.random() * 1.5, owned: 0, silT: 0, deadT: 0, born: elapsedPlayTime, prefilled: false, flash: 0, hide: false, hideT: 0, stored: 0, burstT: 0 }; }
+  function newNest(p) { return { x: p.x, y: p.y, alive: true, t: Math.random() * 1.5, owned: 0, silT: 0, deadT: 0, born: elapsedPlayTime, prefilled: false, flash: 0, hide: false, hideT: 0, stored: 0, burstT: 0, infected: false, infectFlash: 0 }; }
   function nestSpawnOne(n, t) {
     var a = randomAngle(), d = 18 + Math.random() * 14, x = n.x + Math.cos(a) * d, y = n.y + 18 + Math.abs(Math.sin(a)) * d;
     var beh = pickBeh(t);
-    if (beh === "flock") { var k = 4 + Math.floor(Math.random() * 5); spawnPack({ x: x, y: y }, k, t); for (var j = mice.length - k; j < mice.length; j++) if (mice[j]) { mice[j].nest = n; mice[j].home = n; } n.owned += k; return; }
-    var m = spawnMouseAt(x, y, typeForBeh(beh, t), t, beh); m.nest = n; m.home = n; if (beh === "burrow") m.hole = { x: n.x, y: n.y }; n.owned++;
+    if (beh === "flock") { var k = 4 + Math.floor(Math.random() * 5); spawnPack({ x: x, y: y }, k, t); for (var j = mice.length - k; j < mice.length; j++) if (mice[j]) { mice[j].nest = n; mice[j].home = n; applyMutantRoll(mice[j], n); } n.owned += k; return; }
+    var m = spawnMouseAt(x, y, typeForBeh(beh, t), t, beh); m.nest = n; m.home = n; if (beh === "burrow") m.hole = { x: n.x, y: n.y }; applyMutantRoll(m, n); n.owned++;
   }
   function mouseCap() { return dayNow.night > 0 && resScale > 0.6 ? Math.round(lerp(180, NIGHT_CAP, dayNow.night)) : 180; }
   function nestSpawn(dt) {
@@ -3582,7 +3596,7 @@
     for (var i = 0; i < k && mice.length < cap; i++) {
       var a = Math.PI / 2 + (i - (k - 1) / 2) * 0.6 + (Math.random() - 0.5) * 0.2, beh = pickBeh(t); if (beh === "flock") beh = "wander";
       var m = spawnMouseAt(n.x + Math.cos(a) * 16, n.y + 14 + Math.abs(Math.sin(a)) * 10, typeForBeh(beh, t), t, beh);
-      m.nest = n; m.home = n; if (beh === "burrow") m.hole = { x: n.x, y: n.y }; n.owned++;
+      m.nest = n; m.home = n; if (beh === "burrow") m.hole = { x: n.x, y: n.y }; applyMutantRoll(m, n); n.owned++;
       var sp = (m.speed || 120) * 1.6; m.vx = Math.cos(a) * sp; m.vy = Math.sin(a) * sp;
     }
     if (CA.sfx.nest) CA.sfx.nest("burst");
@@ -3609,7 +3623,7 @@
       var n = nests[i];
       if (n.flash > 0) n.flash -= dt;
       if (n.burstT > 0) n.burstT -= dt;
-      if (!n.alive) { n.deadT += dt; if (n.deadT >= NEST_RESPAWN) { var p = placeNest(600); if (p) { n.x = p.x; n.y = p.y; n.alive = true; n.t = 1; n.owned = 0; n.stored = 0; n.hide = false; n.prefilled = false; n.flash = 2; if (CA.sfx.nest) CA.sfx.nest("respawn"); } else n.deadT = NEST_RESPAWN - 5; } }
+      if (!n.alive) { n.deadT += dt; if (n.deadT >= NEST_RESPAWN) { var p = placeNest(600); if (p) { n.x = p.x; n.y = p.y; n.alive = true; n.t = 1; n.owned = 0; n.stored = 0; n.hide = false; n.prefilled = false; n.flash = 2; n.infected = false; n.infectFlash = 0; if (CA.sfx.nest) CA.sfx.nest("respawn"); } else n.deadT = NEST_RESPAWN - 5; } }
     }
     nestAddT += dt;
     if (nestAddT >= NEST_ADD_EVERY) { nestAddT = 0; if (nests.length < NEST_MAX) { var q = placeNest(600); if (q) { var nn = newNest(q); nn.flash = 2; nests.push(nn); } } }
@@ -3739,6 +3753,12 @@
       if (IMG.nest) shadow(sx + s(2), sy + 24 * u, 58 * u);
       if (!n.alive && n.deadT < 0.4) { var k = n.deadT / 0.4; blitSpr(nestSprite(false, u), sx, sy, u * (1 - k * 0.3), 1 - k); }
       blitSpr(nestSprite(!n.alive, u), sx, sy, u, n.alive ? 1 : Math.min(1, n.deadT / 0.4) * 0.9);
+      if (n.alive && n.infected) {
+        var ig = resScale < 1 ? 0.25 : (0.35 + 0.2 * Math.sin(elapsedPlayTime * 3));
+        ctx.fillStyle = "rgba(60,220,80," + ig + ")"; ctx.beginPath(); ctx.ellipse(sx, sy + s(6), s(38), s(22), 0, 0, 7); ctx.fill();
+        if (resScale >= 1) { ctx.strokeStyle = "rgba(120,255,140,.55)"; ctx.lineWidth = s(2); ctx.beginPath(); ctx.arc(sx, sy, s(34 + Math.sin(elapsedPlayTime * 4) * 3), 0, 7); ctx.stroke(); }
+        if (n.infectFlash > 0) { n.infectFlash -= 1/60; ctx.strokeStyle = "rgba(100,255,120," + (n.infectFlash / 1.2) + ")"; ctx.lineWidth = s(5); ctx.beginPath(); ctx.arc(sx, sy, s(70) * (1.3 - n.infectFlash * 0.2), 0, 7); ctx.stroke(); }
+      }
       if (n.alive && n.flash > 0) { ctx.strokeStyle = "rgba(255,210,80," + (n.flash / 2) + ")"; ctx.lineWidth = s(4); ctx.beginPath(); ctx.arc(sx, sy, s(60) * (1.4 - n.flash * 0.2), 0, 7); ctx.stroke(); }
       if (n.alive && n.hide) { // 窝口两只发抖的小眼睛 + 💦
         var tr = reducedMotion ? 0 : Math.sin(elapsedPlayTime * 40) * s(1.2), ey = sy + s(4), ap = Math.min(1, n.hideT * 3);
@@ -3844,11 +3864,11 @@
     var list = [], hw = W / 2, hh = H / 2, i;
     for (i = 0; i < mice.length; i++) { var m = mice[i]; if (!uniOk(m)) continue; var sx = worldToScreenX(m.x), sy = worldToScreenY(m.y);
       if (sx > -10 && sx < W + 10 && sy > -10 && sy < H + 10) continue; var d = distance(m.x, m.y, cat.x, cat.y); if (d > 900) continue; list.push({ m: m, d: d, sx: sx, sy: sy }); }
-    list.sort(function (a, b) { return a.d - b.d; });
+    list.sort(function (a, b) { return (b.m.mutant?1:0) - (a.m.mutant?1:0) || a.d - b.d; });
     for (i = 0; i < Math.min(3, list.length); i++) {
       var L = list[i], a = Math.atan2(L.sy - hh, L.sx - hw), mg = 18, kx = (hw - mg) / Math.abs(Math.cos(a) || 1e-6), ky = (hh - mg - 30) / Math.abs(Math.sin(a) || 1e-6), kk = Math.min(kx, ky);
       var ax = hw + Math.cos(a) * kk, ay = hh + Math.sin(a) * kk, al = clamp(1.1 - L.d / 900, 0.3, 0.95);
-      ctx.save(); ctx.globalAlpha = al; ctx.translate(ax, ay); ctx.rotate(a); ctx.fillStyle = L.m.type === "gold" ? "#ffd23f" : "#ffffff"; ctx.strokeStyle = "rgba(60,40,30,.7)"; ctx.lineWidth = 2;
+      ctx.save(); ctx.globalAlpha = al; ctx.translate(ax, ay); ctx.rotate(a); ctx.fillStyle = L.m.mutant ? "#ff4a4a" : (L.m.type === "gold" ? "#ffd23f" : "#ffffff"); ctx.strokeStyle = "rgba(60,40,30,.7)"; ctx.lineWidth = 2;
       ctx.beginPath(); ctx.moveTo(9, 0); ctx.lineTo(-6, -7); ctx.lineTo(-6, 7); ctx.closePath(); ctx.fill(); ctx.stroke(); ctx.restore();
     }
   }
@@ -3861,7 +3881,7 @@
     var k = size / (2 * MAP_HALF), X = function (x) { return (x + MAP_HALF) * k; };
     if (TERR) { if (!miniBase || miniBase.width !== Math.round(size * d)) miniBase = TERR.miniMap(Math.round(size * d)); g.drawImage(miniBase, 0, 0, size, size); } else { g.fillStyle = "#b8e6a0"; g.fillRect(0, 0, size, size); }
     if (dayNow.night > 0) { g.fillStyle = "rgba(10,15,50," + (0.4 * dayNow.night) + ")"; g.fillRect(0, 0, size, size); }
-    for (var i = 0; i < nests.length; i++) { var n = nests[i]; if (n.alive) { g.fillStyle = n.flash > 0 ? "#ffd23f" : "#a0683a"; g.beginPath(); g.arc(X(n.x), X(n.y), Math.max(3, size / 30), 0, 7); g.fill(); } else { g.strokeStyle = "#8a8a8a"; g.lineWidth = 1.5; var q = size / 40; g.beginPath(); g.moveTo(X(n.x) - q, X(n.y) - q); g.lineTo(X(n.x) + q, X(n.y) + q); g.moveTo(X(n.x) + q, X(n.y) - q); g.lineTo(X(n.x) - q, X(n.y) + q); g.stroke(); } }
+    for (var i = 0; i < nests.length; i++) { var n = nests[i]; if (n.alive) { g.fillStyle = n.flash > 0 ? "#ffd23f" : (n.infected ? "#4dff6a" : "#a0683a"); g.beginPath(); g.arc(X(n.x), X(n.y), Math.max(3, size / 30), 0, 7); g.fill(); } else { g.strokeStyle = "#8a8a8a"; g.lineWidth = 1.5; var q = size / 40; g.beginPath(); g.moveTo(X(n.x) - q, X(n.y) - q); g.lineTo(X(n.x) + q, X(n.y) + q); g.moveTo(X(n.x) + q, X(n.y) - q); g.lineTo(X(n.x) - q, X(n.y) + q); g.stroke(); } }
     var hw = W / (2 * SCALE), hh = H / (2 * SCALE); g.strokeStyle = "rgba(122,74,42,.6)"; g.lineWidth = 1.2; g.strokeRect(X(camera.x - hw), X(camera.y - hh), 2 * hw * k, 2 * hh * k);
     g.fillStyle = "#ff8a3d"; g.strokeStyle = "#fff"; g.lineWidth = 1.5; g.beginPath(); g.arc(X(cat.x), X(cat.y), Math.max(3.5, size / 26), 0, 7); g.fill(); g.stroke();
   }
@@ -4095,7 +4115,7 @@
     for (var i = sigFx.length - 1; i >= 0; i--) { sigFx[i].age += dt; if (sigFx[i].age > (sigFx[i].life || 0.5)) sigFx.splice(i, 1); }
     if (sigFx.length > 60) sigFx.splice(0, sigFx.length - 60);
     for (i = lockFx.length - 1; i >= 0; i--) { lockFx[i].age += dt; if (lockFx[i].age > 0.6) lockFx.splice(i, 1); }
-    if (!sig && lock && sigCd <= 0 && !poopSitting() && !(uni && uni.lunge)) { var p = sigParams(); if (sigCanFire(lock.m, p)) sigStart(lock.m, p); }
+    if (!sig && lock && sigCd <= 0 && !poopSitting() && !(uni && uni.lunge) && !bioCatStunned()) { var p = sigParams(); if (sigCanFire(lock.m, p)) sigStart(lock.m, p); }
   }
   function sigEnd() {
     var S = sig; sig = null; if (!S) return; cat.squash = 1;
@@ -4209,6 +4229,201 @@
     if (sigFlash > 0) { ctx.fillStyle = "rgba(255,255,255,0.35)"; ctx.fillRect(0, 0, W, H); }
   }
 
+  // =======================================================================
+  // v21 BIOHAZARD2：捕捉驱动变异概率 + 窝感染 + 3 心眩晕复活（服务端零改）
+  // =======================================================================
+  var BIO_INFECT_R = 80, BIO_INFECT_T = 1.5, BIO_BITE_R = 90, BIO_BITE_WIND = 0.4;
+  var BIO_HEARTS_MAX = 3, bioFishBonus = 0;
+  var bio = { seen: false, hearts: BIO_HEARTS_MAX, stun: 0, iFrames: 0, banner: null, bannerT: 0, nightCount: 0, wasNight: false, blood: false };
+  function bioReset() {
+    bio.seen = false; bio.hearts = BIO_HEARTS_MAX; bio.stun = 0; bio.iFrames = 0;
+    bio.banner = null; bio.bannerT = 0; bio.nightCount = 0; bio.wasNight = false; bio.blood = false; bioFishBonus = 0;
+  }
+  function mutantP(C) {
+    if (C < 15) return 0;
+    if (C < 40) return 0.05 + (C - 15) / 25 * 0.07;
+    if (C < 80) return 0.12 + (C - 40) / 40 * 0.16;
+    if (C < 150) return 0.28 + (C - 80) / 70 * 0.17;
+    return 0.50;
+  }
+  function applyMutantRoll(m, nest) {
+    if (!m) return m;
+    if (m.type === "gold") { // 金鼠优先；感染窝可带绿边但不改分
+      if (nest && nest.infected) m.tainted = true;
+      return m;
+    }
+    var force = nest && nest.infected, p = force ? 1 : mutantP(catches);
+    if (force || Math.random() < p) {
+      m.mutant = true; m.hp = 2; m.infectAcc = 0; m.biteT = 0; m.biteCd = 0; m.biting = false;
+      if (!bio.seen) { bio.seen = true; bioShowBanner("⚠ 变异鼠出现了！", 2.4); }
+    }
+    return m;
+  }
+  function infectNest(n) {
+    if (!n || !n.alive || n.infected) return;
+    n.infected = true; n.infectFlash = 1.2;
+    if (CA.sfx.nest) CA.sfx.nest("burst");
+    bioShowBanner("🦠 老鼠窝被感染！", 2.2); buzz(18);
+  }
+  function bioInfectRatio() {
+    var a = 0, t = 0; for (var i = 0; i < nests.length; i++) if (nests[i].alive) { t++; if (nests[i].infected) a++; }
+    return t ? a / t : 0;
+  }
+  function bioShowBanner(txt, sec) { bio.banner = txt; bio.bannerT = sec || 2; }
+  function tryHitMouse(m) {
+    // 返回 true = 已消灭；false = 未死。招牌扑（冲刺/出招）一击；普攻 2 击，带短暂无敌
+    if (!m.mutant) return true;
+    if (m.hitInv > 0) return false;
+    var sigKill = !!(sig && sig.go);
+    if (sigKill) return true;
+    m.hp = (m.hp == null ? 2 : m.hp) - 1; m.hitInv = 0.4; m.flash = 0.35;
+    if (m.hp <= 0) return true;
+    var a = Math.atan2(m.y - cat.y, m.x - cat.x); m.vx = Math.cos(a) * 220; m.vy = Math.sin(a) * 220;
+    m.stun = Math.max(m.stun || 0, 0.25); m.excl = 0.5; buzz(8); return false;
+  }
+  function onMutantCaptureBonus(m) {
+    if (!m.mutant) return;
+    bioFishBonus++;
+    try { storageSet("catmouse_fish", String(lsNum("catmouse_fish") + 1)); } catch (e) {}
+  }
+  function bioCatStunned() { return bio.stun > 0; }
+  function bioTakeBite() {
+    if (bio.iFrames > 0 || bio.stun > 0) return;
+    bio.hearts = Math.max(0, bio.hearts - 1); bio.iFrames = 0.8; hitStopT = Math.max(hitStopT, 0.08);
+    feedback("wave"); buzz(30);
+    if (bio.hearts <= 0) {
+      bio.stun = 1.6; bio.hearts = BIO_HEARTS_MAX; bio.iFrames = 2.0;
+      bioShowBanner("💫 眩晕恢复…", 1.6); clearTargets(); if (sig) sig = null;
+    }
+  }
+  function bioUpdate(dt) {
+    if (bio.bannerT > 0) { bio.bannerT -= dt; if (bio.bannerT <= 0) bio.banner = null; }
+    if (bio.stun > 0) bio.stun -= dt;
+    if (bio.iFrames > 0) bio.iFrames = Math.max(0, bio.iFrames - dt);
+    var night = dayNow.night > 0.5;
+    if (night && !bio.wasNight) bio.nightCount++;
+    bio.wasNight = night;
+    var ir = bioInfectRatio();
+    bio.blood = night && (ir >= 0.5 || catches >= 80) && bio.nightCount >= 1;
+    // 变异鼠：感染窝 + 咬猫
+    for (var i = 0; i < mice.length; i++) {
+      var m = mice[i]; if (!m.mutant || !uniOk(m)) continue;
+      if (m.hitInv > 0) m.hitInv -= dt;
+      if (m.flash > 0) m.flash -= dt;
+      if (m.biteCd > 0) m.biteCd -= dt;
+      // 不愿上坡（喘气点）：山体附近减速
+      if (TERR && TERR.blocked && m.state !== "flee") {
+        // 轻量：朝窝走时用 infect 行为
+      }
+      // 感染：锁定最近普通窝；靠近累计 / 钻入即染
+      if (!m.infectTarget || !m.infectTarget.alive || m.infectTarget.infected) {
+        var best = null, bd = 1e9;
+        for (var j = 0; j < nests.length; j++) { var n0 = nests[j]; if (!n0.alive || n0.infected) continue; var dd = distance(m.x, m.y, n0.x, n0.y); if (dd < bd) { bd = dd; best = n0; } }
+        m.infectTarget = best; m.infectAcc = 0;
+      }
+      if (m.infectTarget) {
+        var n = m.infectTarget, dn = distance(m.x, m.y, n.x, n.y);
+        if (dn < BIO_INFECT_R) {
+          m.infectAcc = (m.infectAcc || 0) + dt;
+          if (m.infectAcc >= BIO_INFECT_T || dn < 28) infectNest(n);
+        } else m.infectAcc = Math.max(0, (m.infectAcc || 0) - dt * 0.5);
+      }
+      // 咬：进 90 世界单位蓄力 0.4s（固定值，不乘 entityScaleMult）
+      if (bio.seen && bio.stun <= 0 && !(m.biteCd > 0) && !(sig && sig.hide) && !(bio.iFrames > 0)) {
+        var dc = distance(m.x, m.y, cat.x, cat.y);
+        if (dc < BIO_BITE_R) {
+          if (!m.biting) { m.biting = true; m.biteT = BIO_BITE_WIND; }
+          m.biteT -= dt;
+          if (m.biteT <= 0) {
+            m.biting = false; m.biteT = 0; m.biteCd = 1.4;
+            if (distance(m.x, m.y, cat.x, cat.y) < BIO_BITE_R + 25) bioTakeBite();
+          }
+        } else { m.biting = false; m.biteT = 0; }
+      } else if (m.biteCd > 0) { m.biting = false; }
+    }
+  }
+  function drawBioHud() {
+    if (!bio.seen || (state !== STATE_PLAY && state !== STATE_PAUSE)) return;
+    var x0 = 14 + (typeof CSS !== "undefined" ? 0 : 0);
+    // 心：左上计数下方
+    var hx = 18, hy = 48; try { var sa = getComputedStyle(document.documentElement); } catch (e) {}
+    hx = 18; hy = 52;
+    for (var i = 0; i < BIO_HEARTS_MAX; i++) {
+      var on = i < bio.hearts; ctx.globalAlpha = on ? 1 : 0.35;
+      emojiQuick(on ? "❤️" : "🖤", hx + i * 22, hy, 18);
+    }
+    ctx.globalAlpha = 1;
+    // 感染细条
+    var ir = bioInfectRatio();
+    if (ir > 0) {
+      var bw = 72, bx = W / 2 - bw / 2, by = 36;
+      ctx.fillStyle = "rgba(0,0,0,.35)"; ctx.fillRect(bx, by, bw, 5);
+      ctx.fillStyle = "rgba(80,220,90,.85)"; ctx.fillRect(bx, by, bw * ir, 5);
+    }
+    if (bio.banner && bio.bannerT > 0) {
+      ctx.globalAlpha = Math.min(1, bio.bannerT * 2); ctx.fillStyle = "rgba(20,30,20,.55)";
+      var tw = Math.min(W - 40, 280); ctx.fillRect(W / 2 - tw / 2, 70, tw, 28);
+      ctx.fillStyle = "#e8ffe8"; ctx.font = "bold 14px system-ui,sans-serif"; ctx.textAlign = "center";
+      ctx.fillText(bio.banner, W / 2, 89); ctx.globalAlpha = 1;
+    }
+  }
+  function drawBioOverlays() {
+    // 咬电报
+    for (var i = 0; i < mice.length; i++) {
+      var m = mice[i]; if (!m.mutant || !(m.biteT > 0)) continue;
+      var sx = worldToScreenX(m.x), sy = worldToScreenY(m.y);
+      if (sx < -40 || sx > W + 40 || sy < -40 || sy > H + 40) continue;
+      var k = 1 - m.biteT / BIO_BITE_WIND;
+      ctx.strokeStyle = "rgba(255,60,60," + (0.45 + 0.5 * k) + ")"; ctx.lineWidth = s(3);
+      ctx.beginPath(); ctx.arc(sx, sy, s(28 + k * 18), 0, 7); ctx.stroke();
+      emojiQuick("!", sx, sy - s(36), s(22), null, "#ff3030");
+    }
+    // 变异鼠受伤闪
+    for (i = 0; i < mice.length; i++) {
+      m = mice[i]; if (!m.mutant || !(m.flash > 0)) continue;
+      sx = worldToScreenX(m.x); sy = worldToScreenY(m.y);
+      ctx.globalAlpha = m.flash / 0.35 * 0.5; ctx.fillStyle = "#7CFF7A";
+      ctx.beginPath(); ctx.arc(sx, sy, s(22), 0, 7); ctx.fill(); ctx.globalAlpha = 1;
+    }
+    // 眩晕
+    if (bio.stun > 0) {
+      var csx = worldToScreenX(cat.x), csy = worldToScreenY(cat.y);
+      emojiQuick("💫", csx, csy - s(50), s(22));
+      ctx.fillStyle = "rgba(40,20,60," + (0.25 * Math.min(1, bio.stun)) + ")"; ctx.fillRect(0, 0, W, H);
+    }
+  }
+  function drawBioAtmosphere() {
+    if (!bio.seen) return;
+    var ir = bioInfectRatio();
+    // 不安：淡绿雾（弱设备跳过）
+    if (resScale >= 1 && !reducedMotion && ir < 0.5 && !bio.blood) {
+      ctx.fillStyle = "rgba(40,120,50," + (0.04 + 0.06 * Math.min(1, ir * 2)) + ")";
+      ctx.fillRect(0, 0, W, H * 0.18); ctx.fillRect(0, H * 0.82, W, H * 0.18);
+    }
+    // 血月
+    if (bio.blood) {
+      var a = resScale < 1 ? 0.12 : 0.22;
+      ctx.fillStyle = "rgba(140,20,30," + a + ")"; ctx.fillRect(0, 0, W, H);
+      if (resScale >= 1) {
+        ctx.fillStyle = "rgba(255,60,40,.55)"; ctx.beginPath();
+        ctx.arc(W * 0.78, H * 0.12, s(28), 0, 7); ctx.fill();
+      }
+    }
+  }
+  function drawMutantTint(m, sx, sy, u) {
+    if (!m.mutant && !m.tainted) return;
+    ctx.save();
+    ctx.globalAlpha = 0.55;
+    ctx.fillStyle = m.mutant ? "#5cff6a" : "#9dff9a";
+    ctx.beginPath(); ctx.ellipse(sx, sy + 2 * u, 16 * u, 10 * u, 0, 0, 7); ctx.fill();
+    if (m.mutant) {
+      ctx.globalAlpha = 0.9; ctx.fillStyle = "#ff3a3a";
+      ctx.beginPath(); ctx.arc(sx - 5 * u, sy - 8 * u, 2.2 * u, 0, 7); ctx.arc(sx + 5 * u, sy - 8 * u, 2.2 * u, 0, 7); ctx.fill();
+      if (m.hp === 1) { ctx.globalAlpha = 0.7; emojiQuick("💢", sx + 14 * u, sy - 28 * u, 12 * u); }
+    }
+    ctx.restore();
+  }
+
   function update(dt) {
     updateMusic();
     if (state === STATE_PLAY) {
@@ -4216,6 +4431,7 @@
       var sdt = dt; if (hitStopT > 0) { hitStopT -= dt; sdt = dt * 0.12; } // 命中停顿：只放慢动作，不影响计时
       updateCat(sdt);
       nestUpdate(dt);
+      bioUpdate(sdt);
       sigUpdate(sdt);
       uniUpdate(sdt);
       updateAbilities(sdt);
@@ -4265,12 +4481,15 @@
     drawAbilityOverlay();
     drawNight();
     drawNightGlow();
+    drawBioAtmosphere();
     drawDepth();
     drawPoopRing();
     drawEffects();
     drawJuice();
     uniDrawOver();
     sigDrawOver();
+    drawBioOverlays();
+    drawBioHud();
     drawNestArrows();
     drawMouseArrows();
     drawJoystick();
@@ -4436,7 +4655,7 @@
     get state() { return state; },
     get cat() { return { x: cat.x, y: cat.y, vx: cat.vx, vy: cat.vy }; },
     get camera() { return { x: camera.x, y: camera.y }; },
-    get mice() { return mice.map(function (m) { return { id: m.seed, x: m.x, y: m.y, type: m.type, state: m.state, beh: m.beh, under: !!m.under, asleep: !!m.asleep, leader: !!m.leader, packId: m.packId || 0, stun: m.stun > 0 }; }); },
+    get mice() { return mice.map(function (m) { return { id: m.seed, x: m.x, y: m.y, type: m.type, state: m.state, beh: m.beh, under: !!m.under, asleep: !!m.asleep, leader: !!m.leader, packId: m.packId || 0, stun: m.stun > 0, mutant: !!m.mutant, hp: m.hp || 0, biteT: m.biteT || 0 }; }); },
     get behCounts() { var c = {}; mice.forEach(function (m) { c[m.beh] = (c[m.beh] || 0) + 1; }); return c; },
     get aimLog() { return aimLog.slice(); },
     get planLog() { return planLog.slice(); },
@@ -4490,7 +4709,16 @@
     get spriteStats() { return ANIM.stats(); },
     get packs() { var c = {}; mice.forEach(function (m) { if (m.packId) c[m.packId] = (c[m.packId] || 0) + 1; }); return c; },
     spawnPackNear: function (dx, dy, n) { spawnPack({ x: cat.x + dx, y: cat.y + dy }, n || 5, currentDifficulty()); },
-    spawnMouseRaw: function (dx, dy, type, beh) { return !!spawnMouseAt(cat.x + dx, cat.y + dy, type || "grey", currentDifficulty(), beh || "wander"); },
+    spawnMouseRaw: function (dx, dy, type, beh) { var m = spawnMouseAt(cat.x + dx, cat.y + dy, type || "grey", currentDifficulty(), beh || "wander"); return !!m; },
+    spawnMutant: function (dx, dy) { var m = spawnMouseAt(cat.x + (dx||0), cat.y + (dy||0), "grey", currentDifficulty(), "wander"); m.mutant = true; m.hp = 2; m.infectAcc = 0; m.biteCd = 0; m.biting = false; bio.seen = true; return !!m; },
+    get bio() { return { seen: bio.seen, hearts: bio.hearts, stun: bio.stun, p: mutantP(catches), ratio: bioInfectRatio(), blood: bio.blood, nightCount: bio.nightCount, fishBonus: bioFishBonus, infected: nests.filter(function(n){return n.alive&&n.infected;}).length, nests: nests.filter(function(n){return n.alive;}).length, iFrames: bio.iFrames }; },
+    infectNearestNest: function () { var b=null,bd=1e9; nests.forEach(function(n){ if(!n.alive)return; var d=distance(n.x,n.y,cat.x,cat.y); if(d<bd){bd=d;b=n;} }); if(b) infectNest(b); },
+    nearestNest: function () { var b=null,bd=1e9; nests.forEach(function(n){ if(!n.alive)return; var d=distance(n.x,n.y,cat.x,cat.y); if(d<bd){bd=d;b=n;} }); return b?{x:b.x,y:b.y,infected:!!b.infected}:null; },
+    forceBiteCheck: function () { return { biteR: BIO_BITE_R, infectR: BIO_INFECT_R, esm: entityScaleMult }; },
+    resetNestInfection: function () { nests.forEach(function(n){ n.infected=false; n.infectFlash=0; }); },
+    placeMutantAt: function(x,y){ var m=spawnMouseAt(x,y,"grey",currentDifficulty(),"wander"); m.mutant=true; m.hp=2; bio.seen=true; return {x:m.x,y:m.y}; },
+
+
     freezeMice: function () { mice.forEach(function (m) { m.speed = 0; m.vx = 0; m.vy = 0; }); },
     allRandomNames: allRandomNames,
     randomNameOk: randomNameOk,
