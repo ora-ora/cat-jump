@@ -460,6 +460,18 @@
       if (d < bd) { bd = d; best = m; } }
     return best;
   }
+  function pickNestAt(px, py) {
+    var best = null, bd = 48 * 48; // 窝点中略松
+    for (var i = 0; i < nests.length; i++) {
+      var n = nests[i]; if (!n.alive || n.destroying) continue;
+      var sx = worldToScreenX(n.x), sy = worldToScreenY(n.y) - s(8), dx = sx - px, dy = sy - py, d = dx * dx + dy * dy;
+      if (d < bd) { bd = d; best = n; } }
+    return best;
+  }
+  function setNestLock(n) {
+    lock = { nest: n, t: 0, best: 1e9, prog: 0, born: elapsedPlayTime }; flag = null;
+    if (CA.sfx.uni) CA.sfx.uni("chain", 0); buzz(10);
+  }
   function screenToWorld(px, py) { return { x: (px - W / 2) / SCALE + camera.x, y: (py - H / 2) / SCALE + camera.y }; }
   function clearTargets() { lock = null; flag = null; }
   function setLock(m) {
@@ -507,8 +519,14 @@
     if (dom && dom.hud) dom.hud.classList.remove("steering");
     var t = tap; tap = null; moveDir.x = 0; moveDir.y = 0;
     if (t && !t.drag && e.type === "pointerup" && state === STATE_PLAY) {
-      var m = pickMouseAt(e.clientX, e.clientY);
-      if (m) setLock(m);
+      var m = pickMouseAt(e.clientX, e.clientY), nst = pickNestAt(e.clientX, e.clientY);
+      // 鼠站在窝上：谁更近点谁；纯点窝本体才锁窝
+      if (m && nst) {
+        var ms = Math.hypot(worldToScreenX(m.x) - e.clientX, worldToScreenY(m.y) - e.clientY);
+        var ns = Math.hypot(worldToScreenX(nst.x) - e.clientX, worldToScreenY(nst.y) - e.clientY);
+        if (ms <= ns + 6) setLock(m); else setNestLock(nst);
+      } else if (m) setLock(m);
+      else if (nst) setNestLock(nst);
       else { var w = screenToWorld(e.clientX, e.clientY); flag = { x: w.x, y: w.y, t: 0, best: 1e9, prog: 0 }; lock = null; }
     }
     syncKeyDir();
@@ -517,7 +535,14 @@
   function tapSteer(dt) {
     if (tap && !tap.drag && activePointerId !== null && nowMs() - tap.t0 > TAP_MS) toDrag();
     if (activePointerId !== null && tap && tap.drag) return;
-    if (lock) {
+    if (lock && lock.nest) {
+      var nn = lock.nest, okN = nests.indexOf(nn) >= 0 && nn.alive && !nn.destroying;
+      lock.t += dt;
+      if (okN) { var dn = distance(cat.x, cat.y, nn.x, nn.y); if (dn < lock.best - 4) { lock.best = dn; lock.prog = 0; } else lock.prog += dt;
+        if (dn > 450 * entityScaleMult || lock.t > 8 || lock.prog > 2.5) { lockFx.push({ x: nn.x, y: nn.y, age: 0, kind: "x" }); okN = false; } }
+      if (!okN) { lock = null; if (activePointerId === null) { moveDir.x = 0; moveDir.y = 0; syncKeyDir(); } }
+      else if (!(sig && sig.go) && !nestPoopAnim) { var n2 = normalize(nn.x - cat.x, nn.y - 12 - cat.y); moveDir.x = n2.x; moveDir.y = n2.y; }
+    } else if (lock) {
       var m = lock.m, ok = mice.indexOf(m) >= 0 && m.seed === lock.seed && uniOk(m);
       lock.t += dt;
       if (ok) { var d = distance(cat.x, cat.y, m.x, m.y); if (d < lock.best - 4) { lock.best = d; lock.prog = 0; } else lock.prog += dt;
@@ -1028,7 +1053,7 @@
     catches += 1;
     uniOnCapture(m);
     sigOnCapture(m);
-    onMutantCaptureBonus(m);
+    onMutantCaptureBonus(m); bioCheckHeartGrowth();
     if (m.type === "grey") catchesGrey++;
     else if (m.type === "brown") catchesBrown++;
     else catchesGold++;
@@ -2429,7 +2454,7 @@
     { id: "b8", t: "抓住 8 只棕老鼠", n: 8, v: function () { return catchesBrown; } },
     { id: "k10", t: "打出 10 连击", n: 10, v: function () { return comboMax; } },
     { id: "k20", t: "打出 20 连击", n: 20, v: function () { return comboMax; } },
-    { id: "n1", t: "便便摧毁 1 个老鼠窝", n: 1, v: function () { return nestStats.destroyed; } },
+    { id: "n1", t: "拆掉 1 个老鼠窝", n: 1, v: function () { return nestStats.destroyed; } },
     { id: "night", t: "坚持到夜晚", n: 1, v: function () { return dayNow.night > 0.5 ? 1 : 0; } }
   ];
   var missions = [], missionEl = null;
@@ -3296,6 +3321,10 @@
     dom.resultDuration.textContent = String(Math.round(elapsedPlayTime));
     dom.resultCombo.textContent = String(comboMax);
     dom.resultBest.textContent = String(best);
+    var deathMutant = bioDeath === "mutant";
+    bioDeath = null;
+    var rh = dom.resultScreen && dom.resultScreen.querySelector("h2");
+    if (rh) rh.textContent = deathMutant ? "被变异鼠搞定了…" : "本局结算";
     dom.resultRankStatus.textContent = "结算中…"; var rg = document.getElementById("resultGap"); if (rg) rg.classList.add("hidden");
     dom.nicknameInputResult.value = storageGet("catmouse_nickname", "");
     dom.nicknameHintResult.classList.add("hidden");
@@ -3522,14 +3551,14 @@
   var NEST_DAY_IV = 2.5, NEST_NIGHT_IV = 1.4, NEST_OWN_MAX = 12, NEST_ROAM = 350, NIGHT_CAP = 240;
   var DAY_T = 120, DUSK_T = 8, NIGHT_T = 60, DAWN_T = 8, CYCLE_T = DAY_T + DUSK_T + NIGHT_T + DAWN_T;
   var NEST_HIDE_R = 220, NEST_HIDE_R_NIGHT = 160, NEST_STORE_MAX = 6; // 猫靠近窝：停止出鼠、鼠在窝里攒着（初始值，未平衡）
-  var POOP_T = 3, POOP_R = 40, POOP_MIN_RUN = 20, NEST_SCORE = 30;
+  var NEST_BREAK_MIN = 20, NEST_HIT_R = 70, NEST_SCORE = 30, nestPoopAnim = null;
   var FENCES = [
     { x: -MAP_HALF - FENCE_T, y: -MAP_HALF - FENCE_T, w: 2 * MAP_HALF + 2 * FENCE_T, h: FENCE_T, kind: "fence" },
     { x: -MAP_HALF - FENCE_T, y: MAP_HALF, w: 2 * MAP_HALF + 2 * FENCE_T, h: FENCE_T, kind: "fence" },
     { x: -MAP_HALF - FENCE_T, y: -MAP_HALF, w: FENCE_T, h: 2 * MAP_HALF, kind: "fence" },
     { x: MAP_HALF, y: -MAP_HALF, w: FENCE_T, h: 2 * MAP_HALF, kind: "fence" }
   ];
-  var nests = [], poops = [], nestStats = { destroyed: 0 }, poopSit = { t: 0, nest: null }, nestAddT = 0, ownRecount = 0;
+  var nests = [], poops = [], nestStats = { destroyed: 0 }, nestAddT = 0, ownRecount = 0;
   function nearEdge(x, y, m) { return x < -MAP_HALF + m || x > MAP_HALF - m || y < -MAP_HALF + m || y > MAP_HALF - m; }
   // 昼夜：返回 { night: 0..1, phase: "day"|"dusk"|"night"|"dawn", left: 秒 }
   function dayInfo() {
@@ -3559,10 +3588,10 @@
     return null;
   }
   function nestsInit() {
-    nests.length = 0; poops.length = 0; nestStats.destroyed = 0; poopSit.t = 0; poopSit.nest = null; nestAddT = 0;
+    nests.length = 0; poops.length = 0; nestStats.destroyed = 0; nestPoopAnim = null; nestAddT = 0;
     for (var i = 0; i < NEST_START; i++) { var p = placeNest(0); if (p) nests.push(newNest(p)); }
   }
-  function newNest(p) { return { x: p.x, y: p.y, alive: true, t: Math.random() * 1.5, owned: 0, silT: 0, deadT: 0, born: elapsedPlayTime, prefilled: false, flash: 0, hide: false, hideT: 0, stored: 0, burstT: 0, infected: false, infectFlash: 0 }; }
+  function newNest(p) { return { x: p.x, y: p.y, alive: true, t: Math.random() * 1.5, owned: 0, silT: 0, deadT: 0, born: elapsedPlayTime, prefilled: false, flash: 0, hide: false, hideT: 0, stored: 0, burstT: 0, infected: false, infectFlash: 0, maxHits: 3, hitsLeft: 3, hitFlash: 0, destroying: false }; }
   function nestSpawnOne(n, t) {
     var a = randomAngle(), d = 18 + Math.random() * 14, x = n.x + Math.cos(a) * d, y = n.y + 18 + Math.abs(Math.sin(a)) * d;
     var beh = pickBeh(t);
@@ -3604,12 +3633,34 @@
   function silenceNests(x, y, r, secs) { for (var i = 0; i < nests.length; i++) if (nests[i].alive && distance(nests[i].x, nests[i].y, x, y) < r) nests[i].silT = Math.max(nests[i].silT, secs); }
   function nestNear(x, y, r) { for (var i = 0; i < nests.length; i++) { var n = nests[i]; if (n.alive && distance(n.x, n.y, x, y) < r) return n; } return null; }
   function destroyNest(n) {
-    n.alive = false; n.deadT = 0; nestStats.destroyed++; n.stored = 0; n.hide = false;
+    n.alive = false; n.deadT = 0; n.destroying = false; nestStats.destroyed++; n.stored = 0; n.hide = false;
     poops.push({ x: n.x + 26, y: n.y + 16, age: 0 });
     score += NEST_SCORE; spawnScorePopup(n.x, n.y - 30, NEST_SCORE);
     for (var i = 0; i < mice.length; i++) { var m = mice[i]; if (m.nest === n) { m.nest = null; if (distance(m.x, m.y, n.x, n.y) < NEST_ROAM) { startFlee(m, 4); m.home = null; } } }
+    if (lock && lock.nest === n) lock = null;
     if (CA.sfx.nest) CA.sfx.nest("poop"); feedback("wave");
     maybeSendHeartbeat(Date.now());
+  }
+  function hitNest(n) {
+    if (!n || !n.alive || n.destroying) return false;
+    if (elapsedPlayTime < NEST_BREAK_MIN) { bioShowBanner("开局 " + Math.ceil(NEST_BREAK_MIN - elapsedPlayTime) + "s 后可拆窝", 1.2); return false; }
+    n.hitsLeft = Math.max(0, (n.hitsLeft || n.maxHits || 3) - 1); n.hitFlash = 0.25;
+    sigFxAdd({ type: "smoke", x: n.x, y: n.y }); buzz(14); hitStopT = Math.max(hitStopT, 0.05);
+    if (n.hitsLeft <= 0) { startNestPoopAnim(n); return true; }
+    return true;
+  }
+  function startNestPoopAnim(n) {
+    n.destroying = true; nestPoopAnim = { n: n, t: 0, dur: 1.1 };
+    clearTargets(); if (sig) sig = null; moveDir.x = 0; moveDir.y = 0;
+    bio.iFrames = Math.max(bio.iFrames, 1.2);
+    if (CA.sfx.nest) CA.sfx.nest("strain");
+  }
+  function nestPoopUpdate(dt) {
+    if (!nestPoopAnim) return;
+    var A = nestPoopAnim, n = A.n; A.t += dt;
+    cat.x += (n.x - cat.x) * Math.min(1, dt * 10); cat.y += (n.y - 16 - cat.y) * Math.min(1, dt * 10);
+    if (A.t > 0.35 && A.t - dt <= 0.35 && CA.sfx.nest) CA.sfx.nest("strain");
+    if (A.t >= A.dur) { nestPoopAnim = null; destroyNest(n); }
   }
   function nestUpdate(dt) {
     dayNow = dayInfo();
@@ -3623,22 +3674,15 @@
       var n = nests[i];
       if (n.flash > 0) n.flash -= dt;
       if (n.burstT > 0) n.burstT -= dt;
-      if (!n.alive) { n.deadT += dt; if (n.deadT >= NEST_RESPAWN) { var p = placeNest(600); if (p) { n.x = p.x; n.y = p.y; n.alive = true; n.t = 1; n.owned = 0; n.stored = 0; n.hide = false; n.prefilled = false; n.flash = 2; n.infected = false; n.infectFlash = 0; if (CA.sfx.nest) CA.sfx.nest("respawn"); } else n.deadT = NEST_RESPAWN - 5; } }
+      if (!n.alive) { n.deadT += dt; if (n.deadT >= NEST_RESPAWN) { var p = placeNest(600); if (p) { n.x = p.x; n.y = p.y; n.alive = true; n.t = 1; n.owned = 0; n.stored = 0; n.hide = false; n.prefilled = false; n.flash = 2; n.infected = false; n.infectFlash = 0; n.maxHits = 3; n.hitsLeft = 3; n.hitFlash = 0; n.destroying = false; if (CA.sfx.nest) CA.sfx.nest("respawn"); } else n.deadT = NEST_RESPAWN - 5; } }
     }
     nestAddT += dt;
     if (nestAddT >= NEST_ADD_EVERY) { nestAddT = 0; if (nests.length < NEST_MAX) { var q = placeNest(600); if (q) { var nn = newNest(q); nn.flash = 2; nests.push(nn); } } }
     for (i = poops.length - 1; i >= 0; i--) { poops[i].age += dt; if (poops[i].age > 10) poops.splice(i, 1); }
-    // 蹲窝便便：在窝中心 40 内、没有方向输入、开局 20s 后，静止 3s
-    var on = nestNear(cat.x, cat.y, POOP_R), still = moveDir.x === 0 && moveDir.y === 0 && !(uni && uni.lunge);
-    if (on && still && elapsedPlayTime >= POOP_MIN_RUN) {
-      if (poopSit.nest !== on) { poopSit.nest = on; poopSit.t = 0; }
-      var before = poopSit.t; poopSit.t += dt;
-      if (Math.floor(before * 2) !== Math.floor(poopSit.t * 2) && CA.sfx.nest) CA.sfx.nest("strain");
-      cat.x += (on.x - cat.x) * Math.min(1, dt * 8); cat.y += (on.y - 16 - cat.y) * Math.min(1, dt * 8); // 吸到窝顶（坐在土丘上）
-      if (poopSit.t >= POOP_T) { destroyNest(on); poopSit.t = 0; poopSit.nest = null; }
-    } else { poopSit.t = 0; poopSit.nest = null; }
+    for (i = 0; i < nests.length; i++) if (nests[i].hitFlash > 0) nests[i].hitFlash -= dt;
+    nestPoopUpdate(dt);
   }
-  function poopSitting() { return poopSit.nest && poopSit.t > 0; }
+  function poopSitting() { return !!nestPoopAnim; } // 销毁演出硬直（复用旧门闩）
   // 老鼠在窝附近 350 内游荡
   function homePull(m) {
     var h = m.home; if (!h || m.state !== "wander" || m.asleep || m.packId) return;
@@ -3751,8 +3795,31 @@
       var n = nests[i], sx = worldToScreenX(n.x), sy = worldToScreenY(n.y);
       if (sx < -80 || sx > W + 80 || sy < -90 || sy > H + 80) continue;
       if (IMG.nest) shadow(sx + s(2), sy + 24 * u, 58 * u);
+      var nestTilt = 0;
+      if (n.alive && n.hitsLeft < n.maxHits) {
+        if ((n.maxHits || 3) - n.hitsLeft >= 2) nestTilt = -0.14;
+      }
+      if (nestTilt) { ctx.save(); ctx.translate(sx, sy); ctx.rotate(nestTilt); ctx.translate(-sx, -sy); }
       if (!n.alive && n.deadT < 0.4) { var k = n.deadT / 0.4; blitSpr(nestSprite(false, u), sx, sy, u * (1 - k * 0.3), 1 - k); }
       blitSpr(nestSprite(!n.alive, u), sx, sy, u, n.alive ? 1 : Math.min(1, n.deadT / 0.4) * 0.9);
+      if (nestTilt) ctx.restore();
+      if (n.alive && n.hitsLeft < n.maxHits) { // v22：损毁档（无血条）；按已失击数分档
+        var lost = (n.maxHits || 3) - n.hitsLeft;
+        ctx.save();
+        if (lost >= 1) { // 裂开：碎石 + 裂纹（画在土堆中上部，避免被猫挡住）
+          ctx.fillStyle = "rgba(70,45,28,.9)"; for (var ri = 0; ri < 6; ri++) { ctx.beginPath(); ctx.arc(sx + s(-22 + ri * 9), sy + s(-6 + (ri % 3) * 6), s(4 + (ri % 3)), 0, 7); ctx.fill(); }
+          ctx.strokeStyle = "rgba(30,18,10,.85)"; ctx.lineWidth = s(3); ctx.beginPath(); ctx.moveTo(sx - s(24), sy - s(18)); ctx.lineTo(sx - s(2), sy + s(2)); ctx.lineTo(sx + s(20), sy - s(14)); ctx.stroke();
+          ctx.beginPath(); ctx.moveTo(sx - s(8), sy - s(28)); ctx.lineTo(sx + s(10), sy - s(6)); ctx.stroke();
+          ctx.beginPath(); ctx.moveTo(sx + s(4), sy - s(22)); ctx.lineTo(sx + s(22), sy - s(2)); ctx.stroke(); }
+        if (lost >= 2) { // 冒烟 + 歪斜感
+          var sm = reducedMotion ? 0.4 : ((elapsedPlayTime * 1.5 + i) % 1);
+          ctx.globalAlpha = (1 - sm) * 0.75; ctx.fillStyle = n.infected ? "#7dffa0" : "#d0d0d0";
+          ctx.beginPath(); ctx.ellipse(sx + s(10), sy - s(48) - sm * s(28), s(12 + sm * 8), s(8 + sm * 5), 0, 0, 7); ctx.fill();
+          ctx.globalAlpha = (1 - sm) * 0.5; ctx.beginPath(); ctx.ellipse(sx - s(8), sy - s(40) - sm * s(20), s(9 + sm * 5), s(6 + sm * 3), 0, 0, 7); ctx.fill();
+          ctx.globalAlpha = 1; emojiQuick("💨", sx + s(18), sy - s(56) - sm * s(10), s(16), 0.85); }
+        if (n.hitFlash > 0) { ctx.globalAlpha = n.hitFlash / 0.25 * 0.55; ctx.fillStyle = "#fff"; ctx.beginPath(); ctx.ellipse(sx, sy, s(42), s(28), 0, 0, 7); ctx.fill(); ctx.globalAlpha = 1; }
+        ctx.restore();
+      }
       if (n.alive && n.infected) {
         var ig = resScale < 1 ? 0.25 : (0.35 + 0.2 * Math.sin(elapsedPlayTime * 3));
         ctx.fillStyle = "rgba(60,220,80," + ig + ")"; ctx.beginPath(); ctx.ellipse(sx, sy + s(6), s(38), s(22), 0, 0, 7); ctx.fill();
@@ -3785,12 +3852,12 @@
   }
   // 蹲窝进度环（画在猫头顶）
   function drawPoopRing() {
-    if (!poopSitting()) return;
-    var sx = worldToScreenX(cat.x), sy = worldToScreenY(cat.y) - s(8), r = s(44), p = Math.min(1, poopSit.t / POOP_T);
-    ctx.lineCap = "round"; ctx.lineWidth = s(6); ctx.strokeStyle = "rgba(255,255,255,.75)"; ctx.beginPath(); ctx.arc(sx, sy, r, 0, 7); ctx.stroke();
-    ctx.strokeStyle = "#ff9d4d"; ctx.beginPath(); ctx.arc(sx, sy, r, -Math.PI / 2, -Math.PI / 2 + p * Math.PI * 2); ctx.stroke(); ctx.lineCap = "butt";
-    emojiQuick("嗯~ " + (Math.min(POOP_T, poopSit.t)).toFixed(1) + "s", sx, sy - r - s(14), s(13), null, "#fff");
-    if (!reducedMotion) emojiQuick("💦", sx + s(26), sy - s(26) + Math.sin(poopSit.t * 8) * s(2), s(16));
+    if (!nestPoopAnim) return;
+    var A = nestPoopAnim, sx = worldToScreenX(cat.x), sy = worldToScreenY(cat.y) - s(8), p = Math.min(1, A.t / A.dur);
+    ctx.lineCap = "round"; ctx.lineWidth = s(5); ctx.strokeStyle = "rgba(255,255,255,.7)"; ctx.beginPath(); ctx.arc(sx, sy, s(40), 0, 7); ctx.stroke();
+    ctx.strokeStyle = "#c4a574"; ctx.beginPath(); ctx.arc(sx, sy, s(40), -Math.PI / 2, -Math.PI / 2 + p * Math.PI * 2); ctx.stroke(); ctx.lineCap = "butt";
+    emojiQuick("💩", sx + s(18), sy - s(36) - Math.sin(A.t * 10) * s(2), s(20));
+    if (A.t > 0.4) emojiQuick("💨", sx - s(20), sy - s(40), s(14), Math.min(1, (A.t - 0.4) * 2));
   }
   // 夜晚：整体压暗 + 猫身边暖光圈 + 星星；黄昏/黎明偏橙
   var STARS = []; for (var si = 0; si < 40; si++) STARS.push([Math.random(), Math.random() * 0.45, 0.4 + Math.random() * 0.6]);
@@ -3912,7 +3979,7 @@
     { id: "pounce", icon: "🐾", name: "飞扑", lv: ["身前 ±60° · 60px 内有鼠自动扑（冷却 1.2s）", "范围 70px", "冷却 0.9s", "扑中后立刻可再扑", "落地小冲击波，晕住周围老鼠（不计分）"] },
     { id: "chain", icon: "💫", name: "连环扑", lv: ["扑中后 0.4s 内 80px 还有鼠（移动方向 ±90°）再扑，最多 2 连", "最多 2 连", "最多 3 连", "最多 4 连", "最多 5 连"] },
     { id: "dash", icon: "💨", name: "顺势冲刺", lv: ["同方向直走 ≥1s 且前方 150px 有鼠：速度 ×1.3，1.0s", "×1.35，1.2s", "×1.4，1.5s", "×1.45，1.8s", "×1.5，2.2s"] },
-    { id: "poop", icon: "💩", name: "蹲窝便便", lv: ["停在老鼠窝上、不按方向静止 3 秒：便便摧毁老鼠窝 +30 分（开局 20 秒后可用；窝 45 秒后在别处重生）", "同上", "同上", "同上", "同上"] },
+    { id: "poop", icon: "🕳️", name: "拆老鼠窝", lv: ["点窝锁定 → 招牌扑砸窝；普通窝 3 击 / 感染窝 4 击；最后一击播便便收尾动画 +30 分（开局 20 秒后可拆）", "同上", "同上", "同上", "同上"] },
     { id: "corner", icon: "😰", name: "墙角逼宫", lv: ["老鼠背靠障碍且猫在 100px 内：发抖冒汗，速度 -60%", "同上", "两侧 50px 内的老鼠也被吓住", "同上", "同上"] }
   ];
   var uni = null;
@@ -4115,10 +4182,30 @@
     for (var i = sigFx.length - 1; i >= 0; i--) { sigFx[i].age += dt; if (sigFx[i].age > (sigFx[i].life || 0.5)) sigFx.splice(i, 1); }
     if (sigFx.length > 60) sigFx.splice(0, sigFx.length - 60);
     for (i = lockFx.length - 1; i >= 0; i--) { lockFx[i].age += dt; if (lockFx[i].age > 0.6) lockFx.splice(i, 1); }
-    if (!sig && lock && sigCd <= 0 && !poopSitting() && !(uni && uni.lunge) && !bioCatStunned()) { var p = sigParams(); if (sigCanFire(lock.m, p)) sigStart(lock.m, p); }
+    if (!sig && lock && sigCd <= 0 && !poopSitting() && !(uni && uni.lunge) && !bioCatStunned()) {
+      var p = sigParams();
+      if (lock.nest) { if (sigCanFireNest(lock.nest, p)) sigStartNest(lock.nest, p); }
+      else if (lock.m && sigCanFire(lock.m, p)) sigStart(lock.m, p);
+    }
+  }
+  function sigCanFireNest(n, p) {
+    if (!n || !n.alive || n.destroying) return false;
+    var dx = n.x - cat.x, dy = n.y - cat.y, d = Math.sqrt(dx * dx + dy * dy); if (d > SIG_RANGE || d < 1) return false;
+    if (p.kind !== "black" && !terrLineClear(cat.x, cat.y, n.x, n.y)) return false;
+    return true;
+  }
+  function sigStartNest(n, p) {
+    var proxy = { x: n.x, y: n.y - 8, vx: 0, vy: 0, seed: n.x * 0.13 + n.y, nestTarget: n, type: "grey" };
+    sigStart(proxy, p); sig.nestTarget = n; sig.nestHit = false;
+  }
+  function trySigHitNest() {
+    var S = sig; if (!S || !S.nestTarget || S.nestHit) return;
+    var n = S.nestTarget; if (!n.alive || n.destroying) return;
+    if (distance(cat.x, cat.y, n.x, n.y) <= NEST_HIT_R) { S.nestHit = true; hitNest(n); }
   }
   function sigEnd() {
-    var S = sig; sig = null; if (!S) return; cat.squash = 1;
+    var S = sig; if (S && S.nestTarget) trySigHitNest();
+    sig = null; if (!S) return; cat.squash = 1;
     for (var i = 0; i < 4; i++) spawnDust(cat.x, cat.y, Math.atan2(S.uy, S.ux) + (i - 1.5) * 0.9, 10 * entityScaleMult);
     feedback("land");
   }
@@ -4130,7 +4217,8 @@
   // 在 updateCat 里调用（位移类）
   function sigStep(dt) {
     var S = sig; if (!S) return; var esm = entityScaleMult;
-    var alive = mice.indexOf(S.m) >= 0 && S.m.seed === S.seed && uniOk(S.m);
+    var alive = S.nestTarget ? (S.nestTarget.alive && !S.nestTarget.destroying) : (mice.indexOf(S.m) >= 0 && S.m.seed === S.seed && uniOk(S.m));
+    if (S.nestTarget) { S.m.x = S.nestTarget.x; S.m.y = S.nestTarget.y - 8; }
     S.t += dt;
     if (S.ph === "wind") { if (!alive) { sig = null; sigCd = Math.min(sigCd, 0.3); return; } if (S.t >= S.wind) sigDash(); return; }
     if (S.ph === "dash") { // v20：快速冲刺贴近，再放招牌效果
@@ -4146,9 +4234,12 @@
     }
     var k = Math.min(1, S.t / S.dur), e, step, px = cat.x, py = cat.y;
     if (S.kind === "black") {
-      if (k >= 1 && !S.arrived) { S.arrived = true; cat.x = S.bx; cat.y = S.by; S.hide = false; sigFxAdd({ type: "smoke", x: cat.x, y: cat.y }); if (CA.sfx.uni) CA.sfx.uni("land"); }
+      if (k >= 1 && !S.arrived) { S.arrived = true; cat.x = S.bx; cat.y = S.by; S.hide = false; sigFxAdd({ type: "smoke", x: cat.x, y: cat.y }); if (CA.sfx.uni) CA.sfx.uni("land"); trySigHitNest(); }
       else if (S.arrived && S.t >= S.dur + 0.08) sigEnd();
       return;
+    }
+    if (S.nestTarget && S.kind === "calico") { // 打窝：钩子也只算位移贴近
+      if (k >= 1 || !alive) { trySigHitNest(); sigEnd(); } return;
     }
     if (S.kind === "calico" && !S.gold) { // 拉鼠到嘴边
       if (alive) { var m = S.m; m.stun = Math.max(m.stun || 0, 0.1); m.stunKind = "hook"; m.x = S.mx0 + (cat.x - S.mx0) * k * k; m.y = S.my0 + (cat.y - S.my0) * k * k; }
@@ -4168,9 +4259,10 @@
     if (k >= 1) {
       if (S.kind === "orange") { S.z = 0; for (i = 0; i < obs.length; i++) resolveCircleAabb(cat, obs[i]); if (TERR) TERR.push(cat); sigFxAdd({ type: "ring", x: cat.x, y: cat.y, col: "rgba(255,220,170,", r: 40 });
         if (S.caught < S.p.max) { var nb = null, nd = 40 * esm + cat.r; gridEach(cat.x, cat.y, nd + 10, function (mm) { if (uniOk(mm)) { var dd = distance(mm.x, mm.y, cat.x, cat.y); if (dd < nd) { nd = dd; nb = mm; } } }); if (nb) { sigEnd(); uniStartLunge(nb, true); uni.lunge.keep = true; return; } } }
-      if (S.kind === "siamese" && S.caught > 0 && S.caught < S.p.max) { var nx = sigNextBounce(); if (nx) { S.m = nx; S.seed = nx.seed; S.n++; sigGo(); return; } }
+      if (!S.nestTarget && S.kind === "siamese" && S.caught > 0 && S.caught < S.p.max) { var nx = sigNextBounce(); if (nx) { S.m = nx; S.seed = nx.seed; S.n++; sigGo(); return; } }
+      if (S.nestTarget) trySigHitNest();
       sigEnd();
-    }
+    } else if (S.nestTarget) trySigHitNest();
   }
   function sigCatchBonus() { return sig && sig.go && sig.kind === "blue" && sig.caught < sig.p.max ? 15 * entityScaleMult : 0; }
   function sigOnCapture(m) {
@@ -4198,7 +4290,12 @@
       ctx.strokeStyle = "#6b4a2a"; ctx.lineWidth = s(2.5); ctx.beginPath(); ctx.moveTo(fx0, fy0); ctx.lineTo(fx0, fy0 - s(28)); ctx.stroke();
       ctx.fillStyle = col; ctx.beginPath(); ctx.moveTo(fx0, fy0 - s(28)); ctx.lineTo(fx0 + s(16), fy0 - s(23) + Math.sin(t * 8) * s(1.5)); ctx.lineTo(fx0, fy0 - s(17)); ctx.fill(); }
     if (lock && !sig) { ctx.strokeStyle = "rgba(255,255,255,.22)"; ctx.lineWidth = s(1.5); ctx.setLineDash([s(6), s(8)]); ctx.beginPath(); ctx.arc(csx, csy + s(10), s(SIG_RANGE), 0, 7); ctx.stroke(); ctx.setLineDash([]); }
-    if (lock) { var m = lock.m, mx = worldToScreenX(m.x), my = worldToScreenY(m.y) + s(4), r = s(20) + Math.sin(t * 9) * s(1.5);
+    if (lock && lock.nest) {
+      var nx0 = worldToScreenX(lock.nest.x), ny0 = worldToScreenY(lock.nest.y) + s(4), nr = s(28) + Math.sin(t * 9) * s(1.5);
+      ctx.strokeStyle = "#c4a574"; ctx.lineWidth = s(3.5); ctx.lineCap = "round";
+      for (var qn = 0; qn < 4; qn++) { var a1 = qn * Math.PI / 2 + t * 1.5; ctx.beginPath(); ctx.arc(nx0, ny0, nr, a1 + 0.25, a1 + 1.1); ctx.stroke(); }
+      emojiQuick("🕳️", nx0, ny0 - s(40), s(18));
+    } else if (lock && lock.m) { var m = lock.m, mx = worldToScreenX(m.x), my = worldToScreenY(m.y) + s(4), r = s(20) + Math.sin(t * 9) * s(1.5);
       if (lock.t < 0.6) { ctx.globalAlpha = 1 - lock.t / 0.6; ctx.setLineDash([s(5), s(5)]); ctx.strokeStyle = "#fff"; ctx.lineWidth = s(2); ctx.beginPath(); ctx.moveTo(csx, csy); ctx.lineTo(mx, my); ctx.stroke(); ctx.setLineDash([]); ctx.globalAlpha = 1; }
       ctx.strokeStyle = col; ctx.lineWidth = s(3.5); ctx.lineCap = "round";
       for (var q = 0; q < 4; q++) { var a0 = q * Math.PI / 2 + t * 1.5; ctx.beginPath(); ctx.arc(mx, my, r, a0 + 0.25, a0 + 1.1); ctx.stroke(); }
@@ -4233,11 +4330,19 @@
   // v21 BIOHAZARD2：捕捉驱动变异概率 + 窝感染 + 3 心眩晕复活（服务端零改）
   // =======================================================================
   var BIO_INFECT_R = 80, BIO_INFECT_T = 1.5, BIO_BITE_R = 90, BIO_BITE_WIND = 0.4;
-  var BIO_HEARTS_MAX = 3, bioFishBonus = 0;
-  var bio = { seen: false, hearts: BIO_HEARTS_MAX, stun: 0, iFrames: 0, banner: null, bannerT: 0, nightCount: 0, wasNight: false, blood: false };
+  var BIO_HEARTS_MAX0 = 3, bioFishBonus = 0, bioDeath = null;
+  var bio = { seen: false, hearts: 3, maxHearts: 3, stun: 0, iFrames: 0, banner: null, bannerT: 0, nightCount: 0, wasNight: false, blood: false };
+  function maxHeartsFor(C) { return C >= 80 ? 6 : C >= 40 ? 5 : C >= 15 ? 4 : 3; }
   function bioReset() {
-    bio.seen = false; bio.hearts = BIO_HEARTS_MAX; bio.stun = 0; bio.iFrames = 0;
-    bio.banner = null; bio.bannerT = 0; bio.nightCount = 0; bio.wasNight = false; bio.blood = false; bioFishBonus = 0;
+    bio.seen = false; bio.hearts = 3; bio.maxHearts = 3; bio.stun = 0; bio.iFrames = 0;
+    bio.banner = null; bio.bannerT = 0; bio.nightCount = 0; bio.wasNight = false; bio.blood = false; bioFishBonus = 0; bioDeath = null;
+  }
+  function bioCheckHeartGrowth() {
+    var mh = maxHeartsFor(catches);
+    if (mh > bio.maxHearts) {
+      bio.maxHearts = mh; bio.hearts = Math.min(bio.maxHearts, bio.hearts + 1);
+      bioShowBanner("上限 +1 · 现在 " + bio.maxHearts + " 心", 2.0); buzz(12);
+    }
   }
   function mutantP(C) {
     if (C < 15) return 0;
@@ -4262,6 +4367,7 @@
   function infectNest(n) {
     if (!n || !n.alive || n.infected) return;
     n.infected = true; n.infectFlash = 1.2;
+    if (n.maxHits < 4) { n.maxHits = 4; n.hitsLeft = Math.min(n.hitsLeft + 1, 4); }
     if (CA.sfx.nest) CA.sfx.nest("burst");
     bioShowBanner("🦠 老鼠窝被感染！", 2.2); buzz(18);
   }
@@ -4286,19 +4392,18 @@
     bioFishBonus++;
     try { storageSet("catmouse_fish", String(lsNum("catmouse_fish") + 1)); } catch (e) {}
   }
-  function bioCatStunned() { return bio.stun > 0; }
+  function bioCatStunned() { return !!nestPoopAnim; }
   function bioTakeBite() {
-    if (bio.iFrames > 0 || bio.stun > 0) return;
+    if (bio.iFrames > 0 || nestPoopAnim) return;
     bio.hearts = Math.max(0, bio.hearts - 1); bio.iFrames = 0.8; hitStopT = Math.max(hitStopT, 0.08);
     feedback("wave"); buzz(30);
     if (bio.hearts <= 0) {
-      bio.stun = 1.6; bio.hearts = BIO_HEARTS_MAX; bio.iFrames = 2.0;
-      bioShowBanner("💫 眩晕恢复…", 1.6); clearTargets(); if (sig) sig = null;
+      bioDeath = "mutant"; clearTargets(); if (sig) sig = null; moveDir.x = 0; moveDir.y = 0;
+      enterResult();
     }
   }
   function bioUpdate(dt) {
     if (bio.bannerT > 0) { bio.bannerT -= dt; if (bio.bannerT <= 0) bio.banner = null; }
-    if (bio.stun > 0) bio.stun -= dt;
     if (bio.iFrames > 0) bio.iFrames = Math.max(0, bio.iFrames - dt);
     var night = dayNow.night > 0.5;
     if (night && !bio.wasNight) bio.nightCount++;
@@ -4348,9 +4453,9 @@
     // 心：左上计数下方
     var hx = 18, hy = 48; try { var sa = getComputedStyle(document.documentElement); } catch (e) {}
     hx = 18; hy = 52;
-    for (var i = 0; i < BIO_HEARTS_MAX; i++) {
+    for (var i = 0; i < bio.maxHearts; i++) {
       var on = i < bio.hearts; ctx.globalAlpha = on ? 1 : 0.35;
-      emojiQuick(on ? "❤️" : "🖤", hx + i * 22, hy, 18);
+      emojiQuick(on ? "❤️" : "🖤", hx + i * 20, hy, 16);
     }
     ctx.globalAlpha = 1;
     // 感染细条
@@ -4384,12 +4489,6 @@
       sx = worldToScreenX(m.x); sy = worldToScreenY(m.y);
       ctx.globalAlpha = m.flash / 0.35 * 0.5; ctx.fillStyle = "#7CFF7A";
       ctx.beginPath(); ctx.arc(sx, sy, s(22), 0, 7); ctx.fill(); ctx.globalAlpha = 1;
-    }
-    // 眩晕
-    if (bio.stun > 0) {
-      var csx = worldToScreenX(cat.x), csy = worldToScreenY(cat.y);
-      emojiQuick("💫", csx, csy - s(50), s(22));
-      ctx.fillStyle = "rgba(40,20,60," + (0.25 * Math.min(1, bio.stun)) + ")"; ctx.fillRect(0, 0, W, H);
     }
   }
   function drawBioAtmosphere() {
@@ -4673,7 +4772,7 @@
     get abilityPanelOpen() { return !dom.abilityScreen.classList.contains("hidden"); },
     get score() { return score; },
     get catches() { return catches; },
-    get nests() { return { list: nests.map(function (n) { return { x: n.x, y: n.y, alive: n.alive, owned: n.owned, silT: n.silT, hide: n.hide, stored: n.stored }; }), destroyed: nestStats.destroyed, poop: poopSit.t, day: dayNow, cap: mouseCap() }; },
+    get nests() { return { list: nests.map(function (n) { return { x: n.x, y: n.y, alive: n.alive, owned: n.owned, silT: n.silT, hide: n.hide, stored: n.stored, infected: !!n.infected, hitsLeft: n.hitsLeft, maxHits: n.maxHits, destroying: !!n.destroying }; }), destroyed: nestStats.destroyed, poopAnim: !!nestPoopAnim, day: dayNow, cap: mouseCap() }; },
     setElapsed: function (t) { elapsedPlayTime = t; },
     nestHere: function (dx, dy) { var n = newNest({ x: cat.x + (dx || 0), y: cat.y + (dy || 0) }); nests.push(n); return nests.length - 1; },
     clearNests: function () { nests.length = 0; },
@@ -4711,9 +4810,11 @@
     spawnPackNear: function (dx, dy, n) { spawnPack({ x: cat.x + dx, y: cat.y + dy }, n || 5, currentDifficulty()); },
     spawnMouseRaw: function (dx, dy, type, beh) { var m = spawnMouseAt(cat.x + dx, cat.y + dy, type || "grey", currentDifficulty(), beh || "wander"); return !!m; },
     spawnMutant: function (dx, dy) { var m = spawnMouseAt(cat.x + (dx||0), cat.y + (dy||0), "grey", currentDifficulty(), "wander"); m.mutant = true; m.hp = 2; m.infectAcc = 0; m.biteCd = 0; m.biting = false; bio.seen = true; return !!m; },
-    get bio() { return { seen: bio.seen, hearts: bio.hearts, stun: bio.stun, p: mutantP(catches), ratio: bioInfectRatio(), blood: bio.blood, nightCount: bio.nightCount, fishBonus: bioFishBonus, infected: nests.filter(function(n){return n.alive&&n.infected;}).length, nests: nests.filter(function(n){return n.alive;}).length, iFrames: bio.iFrames }; },
+    get bio() { return { seen: bio.seen, hearts: bio.hearts, maxHearts: bio.maxHearts, stun: bio.stun, p: mutantP(catches), ratio: bioInfectRatio(), blood: bio.blood, nightCount: bio.nightCount, fishBonus: bioFishBonus, infected: nests.filter(function(n){return n.alive&&n.infected;}).length, nests: nests.filter(function(n){return n.alive;}).length, iFrames: bio.iFrames }; },
     infectNearestNest: function () { var b=null,bd=1e9; nests.forEach(function(n){ if(!n.alive)return; var d=distance(n.x,n.y,cat.x,cat.y); if(d<bd){bd=d;b=n;} }); if(b) infectNest(b); },
-    nearestNest: function () { var b=null,bd=1e9; nests.forEach(function(n){ if(!n.alive)return; var d=distance(n.x,n.y,cat.x,cat.y); if(d<bd){bd=d;b=n;} }); return b?{x:b.x,y:b.y,infected:!!b.infected}:null; },
+    nearestNest: function () { var b=null,bd=1e9; nests.forEach(function(n){ if(!n.alive)return; var d=distance(n.x,n.y,cat.x,cat.y); if(d<bd){bd=d;b=n;} }); return b?{x:b.x,y:b.y,infected:!!b.infected,hitsLeft:b.hitsLeft,maxHits:b.maxHits}:null; },
+    lockNearestNest: function () { var b=null,bd=1e9; nests.forEach(function(n){ if(!n.alive||n.destroying)return; var d=distance(n.x,n.y,cat.x,cat.y); if(d<bd){bd=d;b=n;} }); if(b) setNestLock(b); return !!b; },
+    hitNearestNest: function () { var b=null,bd=1e9; nests.forEach(function(n){ if(!n.alive)return; var d=distance(n.x,n.y,cat.x,cat.y); if(d<bd){bd=d;b=n;} }); if(b) return hitNest(b); },
     forceBiteCheck: function () { return { biteR: BIO_BITE_R, infectR: BIO_INFECT_R, esm: entityScaleMult }; },
     resetNestInfection: function () { nests.forEach(function(n){ n.infected=false; n.infectFlash=0; }); },
     placeMutantAt: function(x,y){ var m=spawnMouseAt(x,y,"grey",currentDifficulty(),"wander"); m.mutant=true; m.hp=2; bio.seen=true; return {x:m.x,y:m.y}; },
