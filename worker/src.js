@@ -3,8 +3,8 @@
 const UPSTREAM = "https://dzarlikttkosqkcfixbx.supabase.co";
 const ORIGINS = ["https://meow.12121313.xyz", "https://ora-ora.github.io", "https://cat-jump-71a.pages.dev"];
 const ALLOW = [
-  { m: "POST", re: /^\/rest\/v1\/rpc\/(start_run|heartbeat|finish_run)$/ },
-  { m: "GET", re: /^\/rest\/v1\/leaderboard_live$/ }
+  { m: "POST", re: /^\/rest\/v1\/rpc\/(start_run|heartbeat|finish_run|surv_start|surv_finish)$/ },
+  { m: "GET", re: /^\/rest\/v1\/(leaderboard_live|surv_board)$/ }
 ];
 const mem = new Map(); // 后备的进程内限流（没有 ratelimit 绑定时）
 function memLimit(ip, limit, period) {

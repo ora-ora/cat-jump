@@ -3,6 +3,7 @@ main = "src.js"
 compatibility_date = "2024-09-23"
 account_id = "ebdaf8849c70f5d99dd4b23839c74b66"
 workers_dev = true
+keep_vars = true
 
 # 每个 IP 每 60 秒最多 120 次请求（心跳 + 排行榜刷新正常约 30 次/分钟）
 [[unsafe.bindings]]

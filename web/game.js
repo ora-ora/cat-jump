@@ -2524,11 +2524,42 @@
     emojiQuick(h.e, hx, hy, 30 * u);
   }
   function updateShopBtn() { var b = document.getElementById("shopBtn"); if (b) b.textContent = "🛍️ 小铺 · 🐟" + lsNum("catmouse_fish"); }
+  // ---- 守卫战 M3：轻天赋树（每点 ≤5%）+ 轻图鉴（本地）----
+  var TALENTS = [
+    { id: "swift", e: "🐾", name: "轻步", desc: "移速 +4%/点" },
+    { id: "greed", e: "🐟", name: "贪吃", desc: "经验 +5%/点" },
+    { id: "dash", e: "💨", name: "疾冲", desc: "冲刺冷却 −4%/点" },
+    { id: "magnet", e: "🧲", name: "嗅觉", desc: "拾取范围 +5%/点" },
+    { id: "claw", e: "🗡️", name: "快爪", desc: "自动扑击冷却 −4%/点" }
+  ];
+  var TALENT_MAX = 3;
+  function talentsGet() { try { var o = JSON.parse(storageGet("catmouse_talents", "{}")); return o && typeof o === "object" ? o : {}; } catch (e) { return {}; } }
+  function talLv(id) { var v = talentsGet()[id] | 0; return Math.max(0, Math.min(TALENT_MAX, v)); }
+  function talentCost(lv) { return 40 * (lv + 1); }
+  var BEST_ENTRIES = [
+    { id: "grey", e: "🐭", name: "灰鼠", desc: "最常见，成群出没。" },
+    { id: "brown", e: "🐀", name: "褐鼠", desc: "更结实，经验 ×3。" },
+    { id: "gold", e: "👑", name: "金冠鼠", desc: "稀有，经验 ×8。" },
+    { id: "mutant", e: "🧪", name: "变异鼠", desc: "夜里多，会咬人，需多次攻击。" },
+    { id: "thief", e: "🎒", name: "偷鱼鼠", desc: "偷走地上的小鱼，打倒它就还回来。" },
+    { id: "elite", e: "⚠️", name: "精英鼠", desc: "带光环（加速/护盾/回血），掉宝箱。" },
+    { id: "boss", e: "🐀👑", name: "鼠王", desc: "9:40 降临，三阶段。击杀或坚持 60 秒迎来黎明。" }
+  ];
+  function bestGet() { try { var o = JSON.parse(storageGet("catmouse_bestiary", "{}")); return o && typeof o === "object" ? o : {}; } catch (e) { return {}; } }
+  var bestPending = {};
+  function bestNote(m) {
+    var k = m.boss ? "boss" : m.elite ? "elite" : m.thief ? "thief" : m.mutant ? "mutant" : (m.type === "gold" || m.type === "brown") ? m.type : "grey";
+    bestPending[k] = (bestPending[k] || 0) + 1;
+  }
+  function bestFlush() {
+    var b = bestGet(), any = false; for (var k in bestPending) { b[k] = (b[k] | 0) + bestPending[k]; any = true; }
+    bestPending = {}; if (any) storageSet("catmouse_bestiary", JSON.stringify(b));
+  }
   function openShop() {
     var ov = document.getElementById("shopScreen");
     if (!ov) {
       ov = document.createElement("div"); ov.id = "shopScreen"; ov.className = "overlay"; ov.setAttribute("role", "dialog"); ov.setAttribute("aria-label", "帽子小铺");
-      ov.innerHTML = '<div class="panel shop-panel"><h2>🛍️ 帽子小铺</h2><div class="shop-bal"></div><div class="shop-grid"></div><p class="shop-note">小鱼干只存在这台设备上，只换装扮，不影响分数和排行榜。</p><button class="btn-primary shop-close">好啦</button></div>';
+      ov.innerHTML = '<div class="panel shop-panel"><h2>🛍️ 帽子小铺</h2><div class="shop-bal"></div><div class="shop-grid"></div><h3 class="shop-h">🌟 天赋（守卫战，每点 ≤5%）</h3><div class="shop-tal shop-grid"></div><h3 class="shop-h">📖 图鉴</h3><div class="shop-best"></div><p class="shop-note">小鱼干只存在这台设备上：守卫战结算获得，可换帽子或点天赋。天赋只是小幅加成，服务器按同一规则计分。</p><button class="btn-primary shop-close">好啦</button></div>';
       document.getElementById("app").appendChild(ov);
       ov.querySelector(".shop-close").onclick = function () { sfx.click(); ov.classList.add("hidden"); updateShopBtn(); };
     }
@@ -2546,6 +2577,28 @@
         storageSet("catmouse_hat", h.id); hatCache = undefined; openShop();
       };
       grid.appendChild(b);
+    });
+    var tal = ov.querySelector(".shop-tal"), tv = talentsGet(); tal.innerHTML = "";
+    TALENTS.forEach(function (d) {
+      var lv = talLv(d.id), cost = talentCost(lv), b = document.createElement("button"); b.type = "button";
+      b.className = "shop-item tal" + (lv >= TALENT_MAX ? " on" : "") + (lv < TALENT_MAX && fish < cost ? " poor" : "");
+      b.innerHTML = '<span class="si-e"></span><b></b><small></small><small class="tal-d"></small>';
+      b.children[0].textContent = d.e; b.children[1].textContent = d.name + " " + lv + "/" + TALENT_MAX;
+      b.children[2].textContent = lv >= TALENT_MAX ? "已满" : "🐟 " + cost; b.children[3].textContent = d.desc;
+      b.onclick = function () {
+        sfx.click(); var l2 = talLv(d.id), c2 = talentCost(l2);
+        if (l2 >= TALENT_MAX || lsNum("catmouse_fish") < c2) return;
+        storageSet("catmouse_fish", String(lsNum("catmouse_fish") - c2)); tv[d.id] = l2 + 1; storageSet("catmouse_talents", JSON.stringify(tv)); openShop();
+      };
+      tal.appendChild(b);
+    });
+    var bst = ov.querySelector(".shop-best"), bg = bestGet(); bst.innerHTML = "";
+    BEST_ENTRIES.forEach(function (d) {
+      var n = bg[d.id] | 0, el = document.createElement("div"); el.className = "best-item" + (n ? "" : " lock");
+      el.innerHTML = '<span class="si-e"></span><b></b><small></small>';
+      el.children[0].textContent = n ? d.e : "❔"; el.children[1].textContent = n ? d.name + " ×" + n : "未发现";
+      el.children[2].textContent = n ? d.desc : "在守卫战中击败一只来解锁";
+      bst.appendChild(el);
     });
     ov.classList.remove("hidden");
   }
@@ -2795,6 +2848,23 @@
       .catch(function () { return { ok: false, rows: [] }; });
   }
 
+  // ---- 守卫榜（surv_runs）：开局 surv_start，结算 surv_finish；分数由服务器按分量重算 ----
+  var survNet = { id: null, pending: null };
+  function survStartRun(nickname) {
+    survNet.id = null; survNet.pending = null;
+    if (!backendConfigured) return;
+    survNet.pending = rpcPost("surv_start", { p_client_id: clientId, p_nickname: nickname || "", p_skin: currentSkin }).then(function (res) {
+      if (res.ok && res.run_id != null) survNet.id = res.run_id; return res;
+    });
+  }
+  function survFinishRun(info, cb) {
+    if (!backendConfigured || !survNet.pending) { cb({ ok: false, networkError: true }); return; }
+    survNet.pending.then(function () {
+      if (survNet.id == null) { cb({ ok: false, networkError: true }); return; }
+      var id = survNet.id; survNet.id = null; survNet.lastId = id;
+      rpcPost("surv_finish", { p_run_id: id, p_client_id: clientId, p_time_s: info.time, p_kills: info.kills, p_level: info.level, p_boss: info.boss }, true).then(cb);
+    });
+  }
   function startRun(nickname) {
     run.id = null; run.seq = 0; run.lastSentAt = 0; run.lastSentScore = -1;
     run.offline = !backendConfigured;
@@ -3168,7 +3238,7 @@
       var p = r.parts;
       var rank = row.rank != null ? row.rank : i + 1;
       var skinId = SKIN_IDS.indexOf(row.skin) >= 0 ? row.skin : "orange";
-      var isMe = run.id != null && row.live_run_id === run.id;
+      var myId = lbMode === "surv" ? survNet.lastId : run.id, isMe = myId != null && row.live_run_id === myId;
       var changed = !first && r.rank != null && (r.rank !== rank || r.score !== row.display_score);
       r.rank = rank; r.score = row.display_score;
       setText(p.rank, rank);
@@ -3182,6 +3252,8 @@
       toggleCls(p.flag, "hidden", !fl);
       var tagCls = "", tagText = "";
       if (isMe) { tagCls = "lb-me-tag"; tagText = "我"; }
+      else if (row.boss === "killed") { tagCls = "lb-badge boss"; tagText = "👑 屠王"; }
+      else if (row.boss === "survived") { tagCls = "lb-badge dawn"; tagText = "🌅 黎明"; }
       else if (row.is_live) { tagCls = "lb-badge live"; tagText = "游戏中"; }
       else if (row.is_paused) { tagCls = "lb-badge paused"; tagText = "已暂停"; }
       if (p.tag.className !== tagCls) p.tag.className = tagCls;
@@ -3197,17 +3269,37 @@
     }
     lbRows.forEach(function (r, key) { if (!seen.has(key)) { r.el.remove(); lbRows.delete(key); } });
   }
+  var lbMode = SURV_ON ? "surv" : "classic";
+  function lbEnsureModeTabs() {
+    var host = document.getElementById("lbFilter"); if (!host) return;
+    var tabs = document.getElementById("lbModeTabs");
+    if (!tabs) {
+      tabs = document.createElement("div"); tabs.id = "lbModeTabs"; tabs.className = "lb-modes"; tabs.setAttribute("role", "tablist");
+      [["surv", "🌅 守卫榜"], ["classic", "经典榜（旧）"]].forEach(function (d) {
+        var b = document.createElement("button"); b.type = "button"; b.dataset.mode = d[0]; b.textContent = d[1];
+        b.onclick = function () { if (lbMode === d[0]) return; sfx.click(); lbMode = d[0]; loadTopScores(); };
+        tabs.appendChild(b);
+      });
+      host.parentNode.insertBefore(tabs, host);
+    }
+    for (var i = 0; i < tabs.children.length; i++) tabs.children[i].classList.toggle("on", tabs.children[i].dataset.mode === lbMode);
+  }
   function loadTopScores() {
     if (!backendConfigured) { lbShowMessage("lb-error", "排行榜未配置"); return; }
-    if (lbRenderedFilter !== lbSkinFilter) {
-      lbRenderedFilter = lbSkinFilter;
+    lbEnsureModeTabs();
+    if (lbRenderedFilter !== lbSkinFilter + "|" + lbMode) {
+      lbRenderedFilter = lbSkinFilter + "|" + lbMode;
       lbRows.forEach(function (r) { r.el.remove(); }); lbRows.clear();
     }
     if (lbRows.size === 0) lbShowMessage("lb-loading", "加载中…");
     var filterAtRequest = lbSkinFilter;
-    restGet("/rest/v1/leaderboard_live?select=nickname,display_score,is_live,is_paused,skin,rank,live_run_id,country" + (lbSkinFilter ? "&skin=eq." + lbSkinFilter : "") + "&order=rank.asc&limit=" + LEADERBOARD_TOPN_LIMIT)
+    var lbPath = lbMode === "surv"
+      ? "/rest/v1/surv_board?select=nickname,display_score,skin,rank,live_run_id,boss" + (lbSkinFilter ? "&skin=eq." + lbSkinFilter : "") + "&order=rank.asc&limit=" + LEADERBOARD_TOPN_LIMIT
+      : "/rest/v1/leaderboard_live?select=nickname,display_score,is_live,is_paused,skin,rank,live_run_id,country" + (lbSkinFilter ? "&skin=eq." + lbSkinFilter : "") + "&order=rank.asc&limit=" + LEADERBOARD_TOPN_LIMIT;
+    var modeAtRequest = lbMode;
+    restGet(lbPath)
       .then(function (res) {
-        if (filterAtRequest !== lbSkinFilter) return; // 期间切换了筛选，丢弃旧响应
+        if (filterAtRequest !== lbSkinFilter || modeAtRequest !== lbMode) return; // 期间切换了筛选，丢弃旧响应
         if (!res.ok) { lbShowMessage("lb-error", "暂时无法连接排行榜"); return; }
         if (res.rows.length === 0) { lbShowMessage("lb-empty", lbSkinFilter ? "这款小猫还没有人上榜" : "还没有人上榜，来当第一个吧！"); return; }
         lbRender(res.rows);
@@ -3297,11 +3389,11 @@
     resetAbilities();
     dom.abilityBadge.dataset.key = ""; updateSkillBadge(true);
     dom.comboText.classList.add("hidden");
-    setText(dom.rankText, SURV_ON ? "守卫战 · 本地局" : "排名：未上榜");
+    setText(dom.rankText, SURV_ON ? "守卫战" : "排名：未上榜");
     state = STATE_PLAY;
     if (SURV_ON) {
-      // M1：本地结算，不上新榜；仍可开 run 但不强依赖
-      try { startRun(nickname); } catch (e) {}
+      run.id = null; run.offline = true; // 守卫战不走经典心跳
+      try { survStartRun(nickname); } catch (e) {}
       bioShowBanner("拖动走位 · 点按冲刺 · 活到黎明", 2.6);
     } else startRun(nickname);
   }
@@ -3362,9 +3454,16 @@
     var rh = dom.resultScreen && dom.resultScreen.querySelector("h2");
     if (rh) rh.textContent = won ? (surv && surv.bossKilled ? "击败鼠王！黎明到了！" : "黎明到了！") : (deathHorde ? "被鼠潮围咬了…" : (deathMutant ? "被变异鼠搞定了…" : "本局结算"));
     if (SURV_ON && surv) {
-      dom.resultRankStatus.textContent = won
-        ? ("通关 · Lv" + surv.level + " · 击杀 " + surv.kills + " · 守卫榜尚未开放（本地局）")
-        : ("失败 · Lv" + surv.level + " · 击杀 " + surv.kills + " · 再练练走位与冲刺");
+      bestFlush();
+      var head = (won ? "通关" : "失败") + " · Lv" + surv.level + " · 击杀 " + surv.kills + " · 🐟+" + fish;
+      dom.resultRankStatus.textContent = head + " · 守卫榜上传中…";
+      var info = { time: Math.floor(elapsedPlayTime), kills: surv.kills, level: surv.level, boss: won ? (surv.bossKilled ? "killed" : "survived") : "none" };
+      survFinishRun(info, function (res) {
+        if (state !== STATE_RESULT) return;
+        if (res.ok && res.final_score != null) { dom.resultRankStatus.textContent = head + " · 守卫榜第 " + res.rank + " 名（" + res.final_score + " 分）"; dom.resultScore.textContent = String(res.final_score); }
+        else if (res.networkError) dom.resultRankStatus.textContent = head + " · 未能连接守卫榜，成绩未上传";
+        else dom.resultRankStatus.textContent = head + " · 成绩未入榜（" + (res.reason || "rejected") + "）";
+      });
     } else dom.resultRankStatus.textContent = "结算中…";
     var rg = document.getElementById("resultGap"); if (rg) rg.classList.add("hidden");
     dom.nicknameInputResult.value = storageGet("catmouse_nickname", "");
@@ -4618,9 +4717,10 @@
   function survWeapLv(id) { return (surv && surv.weapons[id]) || 0; }
   function survRefreshStats() {
     if (!surv) return;
-    surv.moveSp = 1 + survPassLv("speed") * 0.06;
-    surv.magnet = 1 + survPassLv("magnet") * 0.4;
+    surv.moveSp = (1 + survPassLv("speed") * 0.06) * (1 + talLv("swift") * 0.04);
+    surv.magnet = (1 + survPassLv("magnet") * 0.4) * (1 + talLv("magnet") * 0.05);
     surv.tempo = Math.max(0.55, 1 - survPassLv("tempo") * 0.06);
+    surv.talClaw = 1 - talLv("claw") * 0.04; surv.talDash = 1 - talLv("dash") * 0.04; surv.talXp = 1 + talLv("greed") * 0.05;
   }
   function survDropGem(x, y, v) {
     if (!surv) return;
@@ -4628,7 +4728,7 @@
   }
   function survOnKill(m) {
     if (!survActive()) return;
-    surv.kills++;
+    surv.kills++; bestNote(m);
     var v = m.type === "gold" ? 8 : m.type === "brown" ? 3 : 1;
     if (m.mutant) v = 12;
     if (m.elite) v = 30;
@@ -4638,7 +4738,7 @@
   }
   function survAddXp(v) {
     if (!surv || surv.picking) return;
-    surv.xp += v * (1 + survPassLv("growth") * 0.1);
+    surv.xp += v * (1 + survPassLv("growth") * 0.1) * (surv.talXp || 1);
     var guard = 0;
     while (surv.xp >= survXpNeed(surv.level) && guard++ < 8) {
       surv.xp -= survXpNeed(surv.level);
@@ -4692,10 +4792,12 @@
     if (surv) surv.picking = false;
     var el = document.getElementById("survPick"); if (el) el.classList.add("hidden");
   }
+  var survDbgAutoPick = false;
   function survOpenPick(forced, title) {
     if (!surv || surv.picking) return;
     var cards = forced || survCardPool();
     if (!cards.length) return;
+    if (survDbgAutoPick) { survApplyCard(cards[0]); survRefreshStats && survRefreshStats(); if (surv.chestQ > 0) { surv.chestQ--; survOpenChest(); } return; }
     surv.picking = true;
     var el = survEnsurePickUI();
     var h2 = el.querySelector("h2"); if (h2) h2.textContent = title || "升级！选一张";
@@ -4717,7 +4819,7 @@
     if (!survActive() || surv.picking || surv.dashCd > 0 || surv.dashT > 0) return false;
     var dx = wx - cat.x, dy = wy - cat.y, d = Math.sqrt(dx * dx + dy * dy);
     if (d < 8) { dx = Math.cos(cat.facing) || 1; dy = Math.sin(cat.facing) || 0; d = 1; }
-    surv.dashUx = dx / d; surv.dashUy = dy / d; surv.dashT = SURV_DASH_DUR; surv.dashCd = Math.max(1.2, SURV_DASH_CD - survPassLv("dashp") * 0.3);
+    surv.dashUx = dx / d; surv.dashUy = dy / d; surv.dashT = SURV_DASH_DUR; surv.dashCd = Math.max(1.2, SURV_DASH_CD - survPassLv("dashp") * 0.3) * (surv.talDash || 1);
     bio.iFrames = Math.max(bio.iFrames, SURV_DASH_IFRAME);
     buzz(12); feedback("wave");
     return true;
@@ -5109,7 +5211,7 @@
     }
     // AutoPounce
     if (!surv.autoOff && surv.autoCd <= 0 && surv.dashT <= 0) {
-      surv.autoCd = SURV_AUTO_CD0 * surv.tempo;
+      surv.autoCd = SURV_AUTO_CD0 * surv.tempo * (surv.talClaw || 1);
       survAutoPounce();
     }
     // weapons
@@ -5532,6 +5634,7 @@
       if (!surv) return;
       surv.weapons = {}; surv.autoOff = true; surv.autoCd = 9999; surv.chainT = 9999; surv.fearT = 9999; surv.yarn = [];
     },
+    survAutoPick: function (on) { survDbgAutoPick = on !== false; },
     survSetCycles: function (n) { SURV_CYCLES = Math.max(1, n|0); },
     survSpawnElite: function (af) { var m = survSpawnElite(af, { x: cat.x + 120, y: cat.y }); return { hp: m.hp, elite: m.elite }; },
     survSpawnBoss: function () { survSpawnBoss(); return !!surv.boss; },

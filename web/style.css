@@ -595,3 +595,17 @@ canvas#game { touch-action: none; }
 
 #survPick { z-index: 40; }
 #resultScreen { z-index: 50; }
+/* M3：守卫榜/经典榜切换、天赋、图鉴 */
+.lb-modes { display: flex; gap: 6px; justify-content: center; margin: 4px 0 8px; }
+.lb-modes button { flex: 1; padding: 6px 8px; border-radius: 10px; border: 1px solid rgba(0,0,0,.12); background: rgba(255,255,255,.6); font-weight: 700; font-size: 13px; cursor: pointer; }
+.lb-modes button.on { background: #ffb347; color: #3a2200; border-color: #e08a1e; }
+.lb-badge.boss { background: #ffd54a; color: #4a3000; }
+.lb-badge.dawn { background: #ffe2b8; color: #6a3a00; }
+.shop-h { font-size: 15px; margin: 12px 0 6px; text-align: left; }
+.shop-item .tal-d { font-size: 10px; opacity: .75; }
+.shop-best { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.best-item { display: flex; flex-direction: column; align-items: center; padding: 6px; border-radius: 10px; background: rgba(255,255,255,.55); font-size: 12px; text-align: center; }
+.best-item .si-e { font-size: 22px; }
+.best-item small { font-size: 10px; opacity: .8; }
+.best-item.lock { opacity: .5; }
+.shop-panel { max-height: 88vh; overflow-y: auto; }
