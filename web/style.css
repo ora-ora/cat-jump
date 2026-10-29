@@ -609,3 +609,9 @@ canvas#game { touch-action: none; }
 .best-item small { font-size: 10px; opacity: .8; }
 .best-item.lock { opacity: .5; }
 .shop-panel { max-height: 88vh; overflow-y: auto; }
+/* M4：结算复盘 */
+.surv-report { margin: 6px 0 4px; padding: 8px 10px; border-radius: 12px; background: rgba(255,240,220,.85); font-size: 12.5px; line-height: 1.5; text-align: left; color: #5a3410; }
+.surv-report .sr-death { font-weight: 800; font-size: 14px; color: #b3261e; }
+.surv-report .sr-arrow { display: inline-block; min-width: 26px; text-align: center; font-size: 22px; line-height: 1; color: #fff; background: #d9412b; border-radius: 50%; padding: 2px 0; margin-right: 4px; }
+.surv-report .sr-top { opacity: .9; }
+.surv-report .sr-tip { margin-top: 2px; font-weight: 700; }
