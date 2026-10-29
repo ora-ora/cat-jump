@@ -583,3 +583,15 @@ canvas#game { touch-action: none; }
 #rankToast.show { opacity: 1; transform: none; }
 #hud.tap3 #scoreText::before { content: none; }
 #hud.tap3 #scoreText, #hud.tap3 #dayText { color: #fff !important; text-shadow: 0 1px 2px rgba(0,0,0,.55), 0 0 3px rgba(0,0,0,.35); }
+
+/* v23 survivors upgrade pick */
+.surv-pick-panel { max-width: 420px; }
+.surv-cards { display: flex; flex-direction: column; gap: 10px; margin-top: 8px; }
+.surv-card { text-align: left; border: 3px solid #ffc58f; border-radius: 18px; background: #fff8ef; padding: 12px 14px; cursor: pointer; }
+.surv-card:active { transform: scale(0.98); }
+.surv-card .ic { font-size: 28px; }
+.surv-card .nm { font-weight: 900; color: #5a3a30; margin: 4px 0; }
+.surv-card .ds { font-size: 13px; color: #7a4a2a; line-height: 1.35; }
+
+#survPick { z-index: 40; }
+#resultScreen { z-index: 50; }

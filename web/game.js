@@ -31,6 +31,9 @@
 
   var DIFFICULTY_SCORE_CAP = 2000;
   var DIFFICULTY_TIME_CAP = 300;
+  // v23：公开展示仅守卫战（完整模块见下方 SURVIVORS M1）
+  var SURV_ON = true;
+  var SURV_CYCLES = 1;
 
   var COMBO_WINDOW = 2.5;
   var COMBO_MAX_MULT = 2.5;
@@ -519,6 +522,9 @@
     if (dom && dom.hud) dom.hud.classList.remove("steering");
     var t = tap; tap = null; moveDir.x = 0; moveDir.y = 0;
     if (t && !t.drag && e.type === "pointerup" && state === STATE_PLAY) {
+      if (SURV_ON) {
+        var w0 = screenToWorld(e.clientX, e.clientY); survTryDash(w0.x, w0.y);
+      } else {
       var m = pickMouseAt(e.clientX, e.clientY), nst = pickNestAt(e.clientX, e.clientY);
       // 鼠站在窝上：谁更近点谁；纯点窝本体才锁窝
       if (m && nst) {
@@ -528,6 +534,7 @@
       } else if (m) setLock(m);
       else if (nst) setNestLock(nst);
       else { var w = screenToWorld(e.clientX, e.clientY); flag = { x: w.x, y: w.y, t: 0, best: 1e9, prog: 0 }; lock = null; }
+      }
     }
     syncKeyDir();
   }
@@ -535,6 +542,7 @@
   function tapSteer(dt) {
     if (tap && !tap.drag && activePointerId !== null && nowMs() - tap.t0 > TAP_MS) toDrag();
     if (activePointerId !== null && tap && tap.drag) return;
+    if (SURV_ON) { if (lock || flag) clearTargets(); return; }
     if (lock && lock.nest) {
       var nn = lock.nest, okN = nests.indexOf(nn) >= 0 && nn.alive && !nn.destroying;
       lock.t += dt;
@@ -581,10 +589,11 @@
   function updateCat(dt) {
     cat.r = CAT_RADIUS * entityScaleMult;
     tapSteer(dt);
-    var spdMul = uniSpeedMul();
+    var spdMul = uniSpeedMul() * (survActive() && surv.moveSp ? surv.moveSp : 1);
     var targetVx = moveDir.x * MOVE_SPEED * spdMul;
     var targetVy = moveDir.y * MOVE_SPEED * spdMul;
     if (sig) { targetVx = 0; targetVy = 0; }
+    if (survActive() && surv.dashT > 0) { targetVx = 0; targetVy = 0; cat.vx = 0; cat.vy = 0; }
     // v19 手感：加速/转向更快；反向时先急停
     if (targetVx * cat.vx + targetVy * cat.vy < -0.3 * MOVE_SPEED * MOVE_SPEED) { cat.vx *= 0.25; cat.vy *= 0.25; }
     var smoothing = 1 - Math.exp(-dt * (sig ? 40 : 24));
@@ -670,6 +679,7 @@
   var elapsedPlayTime = 0;
 
   function currentDifficulty() {
+    if (SURV_ON) return survTimeT ? survTimeT() : clamp01(elapsedPlayTime / Math.max(1, CYCLE_T * (typeof SURV_CYCLES === "number" ? SURV_CYCLES : 1)));
     var byScore = clamp01(score / DIFFICULTY_SCORE_CAP);
     var byTime = clamp01(elapsedPlayTime / DIFFICULTY_TIME_CAP);
     return Math.max(byScore, byTime);
@@ -882,6 +892,11 @@
       if (m.hidden) continue; // 在纸箱/雪球里
       var dToCat = distance(m.x, m.y, cat.x, cat.y);
       if (dToCat > cullR) { recycleMouse(i); continue; }
+      // 守卫战：近距主动贴猫（金鼠除外）
+      if (SURV_ON && m.type !== "gold" && !(m.stun > 0) && !(m.pullT > 0) && dToCat < 210 * esm && dToCat > 8) {
+        var ch = normalize(cat.x - m.x, cat.y - m.y), spd = (m.type === "brown" ? 1.35 : 1.0) * 95 * esm;
+        m.vx = ch.x * spd; m.vy = ch.y * spd; m.state = "wander";
+      }
       // LOD：屏幕外且远离猫的老鼠 AI 每秒只更新 10 次
       var off = Math.abs(m.x - camera.x) > hw || Math.abs(m.y - camera.y) > hh;
       var sdt = dt;
@@ -892,7 +907,7 @@
       stepMouse(m, sdt, dToCat, i);
       if (m.under) continue;
       var dAfter = distance(m.x, m.y, cat.x, cat.y);
-      if (dAfter < cat.r + m.r + sigCatchBonus() && !(sig && sig.hide)) { if (tryHitMouse(m)) { onCapture(m); recycleMouse(i); } }
+      if (!SURV_ON && dAfter < cat.r + m.r + sigCatchBonus() && !(sig && sig.hide)) { if (tryHitMouse(m)) { onCapture(m); recycleMouse(i); } }
     }
   }
 
@@ -1053,7 +1068,8 @@
     catches += 1;
     uniOnCapture(m);
     sigOnCapture(m);
-    onMutantCaptureBonus(m); bioCheckHeartGrowth();
+    onMutantCaptureBonus(m); if (!SURV_ON) bioCheckHeartGrowth();
+    if (SURV_ON && surv && !m._survXpDone) { m._survXpDone = true; survOnKill(m); }
     if (m.type === "grey") catchesGrey++;
     else if (m.type === "brown") catchesBrown++;
     else catchesGold++;
@@ -1102,7 +1118,7 @@
     siamese: { name: "歌剧喵", icon: "🎵", lv: [["🎵", "高音符", "每 8 秒音符让老鼠跳舞"], ["🎶", "和弦", "3 个音符追 3 只"], ["💃", "康加舞队", "跳舞的老鼠排队走向你"], ["🔦", "聚光灯", "每 20 秒鼠群停下鞠躬"], ["🎤", "老鼠合唱团", "每 30 秒老鼠围成半圆唱歌"]], evo: "戴上领结，“啦~”！" }
   };
   function skillOf(skin) { return SKILLS[skin] || SKILLS.orange; }
-  function stageFor(n) { var s2 = 1; for (var i = 1; i < STAGE_AT.length; i++) if (n >= STAGE_AT[i]) s2 = i + 1; return s2; }
+  function stageFor(n) { if (SURV_ON) return (ab && ab.stage) || 1; var s2 = 1; for (var i = 1; i < STAGE_AT.length; i++) if (n >= STAGE_AT[i]) s2 = i + 1; return s2; }
 
   var ab = null;
   function resetAbilities() {
@@ -1111,7 +1127,7 @@
       t: {}, hold: {}, holds: 0, pend: {}, plans: 0, cancels: 0, tornPlan: null, kittens: [], boxes: [], balls: [], snowmen: [], webs: [], tornados: [], notes: [], spot: null, roll: 0, swing: null,
       lastFacing: cat.facing, turnAcc: 0, straight: 0, straightDir: cat.facing
     };
-    ab.stage = stageFor(catches); aimLog.length = 0; planLog.length = 0;
+    ab.stage = SURV_ON ? 1 : stageFor(catches); aimLog.length = 0; planLog.length = 0;
     syncKittens();
   }
   // ---- v9：自动瞄准打分器 aimBest + 不空放（命中数不够就按住，冷却不浪费）----
@@ -3271,12 +3287,18 @@
     showScreen(dom.hud);
     resetWorld();
     resetScoring();
+    bioReset();
+    survReset(); survRefreshStats();
     resetAbilities();
     dom.abilityBadge.dataset.key = ""; updateSkillBadge(true);
     dom.comboText.classList.add("hidden");
-    setText(dom.rankText, "排名：未上榜");
+    setText(dom.rankText, SURV_ON ? "守卫战 · 本地局" : "排名：未上榜");
     state = STATE_PLAY;
-    startRun(nickname);
+    if (SURV_ON) {
+      // M1：本地结算，不上新榜；仍可开 run 但不强依赖
+      try { startRun(nickname); } catch (e) {}
+      bioShowBanner("拖动走位 · 点按冲刺 · 活到黎明", 2.6);
+    } else startRun(nickname);
   }
 
   function requestEndRun() {
@@ -3314,24 +3336,38 @@
 
   function enterResult() {
     state = STATE_RESULT;
+    if (typeof survHidePick === "function") survHidePick();
     hideScreen(dom.hud); var mm2 = document.getElementById("miniMap"); if (mm2) mm2.classList.add("hidden");
+    var deathMutant = bioDeath === "mutant";
+    var deathHorde = bioDeath === "horde";
+    var won = survActive() && surv && surv.won;
+    bioDeath = null;
+    if (SURV_ON && surv) {
+      var local = Math.round(elapsedPlayTime * 100 + surv.kills * 10 + surv.level * 50 + (won ? 2000 : 0));
+      score = Math.max(score, local);
+      var fish = Math.round(surv.level * 5 + surv.kills / 10 + (won ? 50 : 0));
+      try { storageSet("catmouse_fish", String(lsNum("catmouse_fish") + fish)); } catch (e) {}
+    }
     if (score > best) { best = score; storageSet("catmouse_best", String(best)); }
-    dom.resultScore.textContent = String(score);
-    dom.resultCatches.textContent = String(catches);
+    dom.resultScore.textContent = String(Math.round(score));
+    dom.resultCatches.textContent = String(SURV_ON && surv ? surv.kills : catches);
     dom.resultDuration.textContent = String(Math.round(elapsedPlayTime));
     dom.resultCombo.textContent = String(comboMax);
     dom.resultBest.textContent = String(best);
-    var deathMutant = bioDeath === "mutant";
-    bioDeath = null;
     var rh = dom.resultScreen && dom.resultScreen.querySelector("h2");
-    if (rh) rh.textContent = deathMutant ? "被变异鼠搞定了…" : "本局结算";
-    dom.resultRankStatus.textContent = "结算中…"; var rg = document.getElementById("resultGap"); if (rg) rg.classList.add("hidden");
+    if (rh) rh.textContent = won ? "黎明到了！" : (deathHorde ? "被鼠潮围咬了…" : (deathMutant ? "被变异鼠搞定了…" : "本局结算"));
+    if (SURV_ON && surv) {
+      dom.resultRankStatus.textContent = won
+        ? ("通关 · Lv" + surv.level + " · 击杀 " + surv.kills + " · 守卫榜尚未开放（本地局）")
+        : ("失败 · Lv" + surv.level + " · 击杀 " + surv.kills + " · 再练练走位与冲刺");
+    } else dom.resultRankStatus.textContent = "结算中…";
+    var rg = document.getElementById("resultGap"); if (rg) rg.classList.add("hidden");
     dom.nicknameInputResult.value = storageGet("catmouse_nickname", "");
     dom.nicknameHintResult.classList.add("hidden");
     missionsResult();
     showScreen(dom.resultScreen);
     sfx.endRun();
-    finishRun();
+    if (!SURV_ON) finishRun();
   }
 
   var lbFromPlay = false, lbRefreshTimer = null;
@@ -3602,7 +3638,7 @@
   function nestSpawn(dt) {
     if (noSpawn) return;
     var t = currentDifficulty(), R = viewRadiusWorld() + 300, cap = mouseCap();
-    var iv = lerp(NEST_DAY_IV, NEST_NIGHT_IV, dayNow.night);
+    var iv = lerp(NEST_DAY_IV, NEST_NIGHT_IV, dayNow.night) / (survActive() && surv.spawnMult ? surv.spawnMult : 1);
     for (var i = 0; i < nests.length; i++) {
       var n = nests[i]; if (!n.alive) continue;
       var dc = distance(n.x, n.y, cat.x, cat.y), hr = (dayNow.night > 0.5 ? NEST_HIDE_R_NIGHT : NEST_HIDE_R) * entityScaleMult;
@@ -3642,6 +3678,7 @@
     maybeSendHeartbeat(Date.now());
   }
   function hitNest(n) {
+    if (SURV_ON) return false; // M1：不拆窝
     if (!n || !n.alive || n.destroying) return false;
     if (elapsedPlayTime < NEST_BREAK_MIN) { bioShowBanner("开局 " + Math.ceil(NEST_BREAK_MIN - elapsedPlayTime) + "s 后可拆窝", 1.2); return false; }
     n.hitsLeft = Math.max(0, (n.hitsLeft || n.maxHits || 3) - 1); n.hitFlash = 0.25;
@@ -4182,7 +4219,7 @@
     for (var i = sigFx.length - 1; i >= 0; i--) { sigFx[i].age += dt; if (sigFx[i].age > (sigFx[i].life || 0.5)) sigFx.splice(i, 1); }
     if (sigFx.length > 60) sigFx.splice(0, sigFx.length - 60);
     for (i = lockFx.length - 1; i >= 0; i--) { lockFx[i].age += dt; if (lockFx[i].age > 0.6) lockFx.splice(i, 1); }
-    if (!sig && lock && sigCd <= 0 && !poopSitting() && !(uni && uni.lunge) && !bioCatStunned()) {
+    if (!SURV_ON && !sig && lock && sigCd <= 0 && !poopSitting() && !(uni && uni.lunge) && !bioCatStunned()) {
       var p = sigParams();
       if (lock.nest) { if (sigCanFireNest(lock.nest, p)) sigStartNest(lock.nest, p); }
       else if (lock.m && sigCanFire(lock.m, p)) sigStart(lock.m, p);
@@ -4334,7 +4371,7 @@
   var bio = { seen: false, hearts: 3, maxHearts: 3, stun: 0, iFrames: 0, banner: null, bannerT: 0, nightCount: 0, wasNight: false, blood: false };
   function maxHeartsFor(C) { return C >= 80 ? 6 : C >= 40 ? 5 : C >= 15 ? 4 : 3; }
   function bioReset() {
-    bio.seen = false; bio.hearts = 3; bio.maxHearts = 3; bio.stun = 0; bio.iFrames = 0;
+    bio.seen = SURV_ON ? true : false; bio.hearts = 3; bio.maxHearts = 3; bio.stun = 0; bio.iFrames = 0;
     bio.banner = null; bio.bannerT = 0; bio.nightCount = 0; bio.wasNight = false; bio.blood = false; bioFishBonus = 0; bioDeath = null;
   }
   function bioCheckHeartGrowth() {
@@ -4345,6 +4382,7 @@
     }
   }
   function mutantP(C) {
+    if (SURV_ON) return 0; // M1：关闭捕捉驱动变异
     if (C < 15) return 0;
     if (C < 40) return 0.05 + (C - 15) / 25 * 0.07;
     if (C < 80) return 0.12 + (C - 40) / 40 * 0.16;
@@ -4357,7 +4395,7 @@
       if (nest && nest.infected) m.tainted = true;
       return m;
     }
-    var force = nest && nest.infected, p = force ? 1 : mutantP(catches);
+    var force = !SURV_ON && nest && nest.infected, p = force ? 1 : mutantP(catches);
     if (force || Math.random() < p) {
       m.mutant = true; m.hp = 2; m.infectAcc = 0; m.biteT = 0; m.biteCd = 0; m.biting = false;
       if (!bio.seen) { bio.seen = true; bioShowBanner("⚠ 变异鼠出现了！", 2.4); }
@@ -4398,7 +4436,8 @@
     bio.hearts = Math.max(0, bio.hearts - 1); bio.iFrames = 0.8; hitStopT = Math.max(hitStopT, 0.08);
     feedback("wave"); buzz(30);
     if (bio.hearts <= 0) {
-      bioDeath = "mutant"; clearTargets(); if (sig) sig = null; moveDir.x = 0; moveDir.y = 0;
+      if (!bioDeath) bioDeath = SURV_ON ? "horde" : "mutant";
+      clearTargets(); if (sig) sig = null; moveDir.x = 0; moveDir.y = 0;
       enterResult();
     }
   }
@@ -4448,7 +4487,7 @@
     }
   }
   function drawBioHud() {
-    if (!bio.seen || (state !== STATE_PLAY && state !== STATE_PAUSE)) return;
+    if ((!bio.seen && !SURV_ON) || (state !== STATE_PLAY && state !== STATE_PAUSE)) return;
     var x0 = 14 + (typeof CSS !== "undefined" ? 0 : 0);
     // 心：左上计数下方
     var hx = 18, hy = 48; try { var sa = getComputedStyle(document.documentElement); } catch (e) {}
@@ -4523,17 +4562,363 @@
     ctx.restore();
   }
 
+  // =======================================================================
+  // v23 SURVIVORS M1：《猫猫守卫战》— 见 skills-design/survivors/SURVIVORS_FINAL.md
+  // =======================================================================
+  var SURV_DASH_CD = 3, SURV_DASH_DUR = 0.22, SURV_DASH_SPD = 720, SURV_DASH_IFRAME = 0.3;
+  var SURV_AUTO_CD0 = 0.8, SURV_AUTO_R = 105;
+  var SURV_CONTACT_R = 28, SURV_CONTACT_WIND = 0.35, SURV_CONTACT_CD = 1.0;
+  var SURV_GEM_MERGE = 40, SURV_GEM_LIFE_DAY = 20, SURV_GEM_LIFE_NIGHT = 12;
+  var surv = null;
+  var survPickEl = null;
+  function survXpNeed(lv) {
+    // 近似定稿曲线压缩到 1 循环：约 Lv10≈420
+    var tab = [0, 5, 12, 25, 45, 75, 115, 165, 230, 310, 400, 500, 620, 760, 920];
+    return tab[Math.min(lv, tab.length - 1)] || (920 + (lv - 14) * 180);
+  }
+  function survWeaponDefs() {
+    return {
+      chain: { name: "连环扑咬", icon: "🐾", kind: "weapon", desc: function (lv) { return "每 " + (4 - lv * 0.25).toFixed(1) + "s 扑咬最近 " + Math.min(5, lv) + " 只"; } },
+      yarn: { name: "毛线飞球", icon: "🧶", kind: "weapon", desc: function (lv) { return "每 3s 发射 " + lv + " 枚穿透毛线球"; } },
+      fear: { name: "恐惧光环", icon: "😱", kind: "weapon", desc: function (lv) { return "每 8s 定身周围鼠 " + (0.8 + lv * 0.4).toFixed(1) + "s"; } }
+    };
+  }
+  function survPassiveDefs() {
+    return {
+      speed: { name: "疾跑鞋", icon: "👟", kind: "passive", desc: function (lv) { return "移速 +" + (lv * 6) + "%"; } },
+      magnet: { name: "磁力项圈", icon: "🧲", kind: "passive", desc: function (lv) { return "拾取半径 +" + (lv * 40) + "%"; } },
+      tempo: { name: "节拍器", icon: "⏱", kind: "passive", desc: function (lv) { return "攻击冷却 -" + (lv * 6) + "%"; } },
+      fur: { name: "厚皮毛", icon: "🛡️", kind: "passive", desc: function (lv) { return "心心上限 +1 并回 1（唯一）"; } },
+      soup: { name: "鱼汤", icon: "🍲", kind: "passive", desc: function (lv) { return "立刻回复 1 心"; } }
+    };
+  }
+  function survReset() {
+    surv = {
+      level: 1, xp: 0, kills: 0, gems: [], weapons: {}, passives: {},
+      dashCd: 0, dashT: 0, dashUx: 1, dashUy: 0, autoCd: 0,
+      spawnMult: 1, panicAt: -1, panicDone: false, won: false, picking: false,
+      nightSeen: 0, contactT: 0, yarn: [], fearT: 0, chainT: 0,
+      moveSp: 1, magnet: 1, tempo: 1, invuln: false, autoOff: false
+    };
+    surv.weapons.chain = 1; // 开局自带一件通用武，保证有输出反馈
+    survHidePick();
+  }
+  function survActive() { return SURV_ON && !!surv; }
+  function survRunDur() { return CYCLE_T * SURV_CYCLES; }
+  function survTimeT() { return clamp01(elapsedPlayTime / Math.max(1, survRunDur())); }
+  function survPassLv(id) { return (surv && surv.passives[id]) || 0; }
+  function survWeapLv(id) { return (surv && surv.weapons[id]) || 0; }
+  function survRefreshStats() {
+    if (!surv) return;
+    surv.moveSp = 1 + survPassLv("speed") * 0.06;
+    surv.magnet = 1 + survPassLv("magnet") * 0.4;
+    surv.tempo = Math.max(0.55, 1 - survPassLv("tempo") * 0.06);
+  }
+  function survDropGem(x, y, v) {
+    if (!surv) return;
+    surv.gems.push({ x: x, y: y, v: v || 1, age: 0, life: dayNow.night > 0.5 ? SURV_GEM_LIFE_NIGHT : SURV_GEM_LIFE_DAY, merge: false });
+  }
+  function survOnKill(m) {
+    if (!survActive()) return;
+    surv.kills++;
+    var v = m.type === "gold" ? 8 : m.type === "brown" ? 3 : 1;
+    if (m.mutant) v = 12;
+    survDropGem(m.x, m.y, v);
+  }
+  function survAddXp(v) {
+    if (!surv || surv.picking) return;
+    surv.xp += v;
+    var guard = 0;
+    while (surv.xp >= survXpNeed(surv.level) && guard++ < 8) {
+      surv.xp -= survXpNeed(surv.level);
+      surv.level++;
+      survOpenPick();
+      if (surv.picking) break;
+    }
+  }
+  function survCardPool() {
+    var W = survWeaponDefs(), P = survPassiveDefs(), out = [];
+    var wCount = 0; for (var k in surv.weapons) if (surv.weapons[k] > 0) wCount++;
+    var pCount = 0; for (k in surv.passives) if (surv.passives[k] > 0 && k !== "soup") pCount++;
+    for (k in W) {
+      var lv = survWeapLv(k);
+      if (lv <= 0 && wCount >= 2) continue;
+      if (lv >= 5) continue;
+      out.push({ id: k, def: W[k], lv: lv, next: lv + 1 });
+    }
+    for (k in P) {
+      lv = survPassLv(k);
+      if (k === "fur" && lv >= 1) continue;
+      if (k === "soup") { out.push({ id: k, def: P[k], lv: 0, next: 1, once: true }); continue; }
+      if (lv <= 0 && pCount >= 3) continue;
+      if (lv >= 5) continue;
+      out.push({ id: k, def: P[k], lv: lv, next: lv + 1 });
+    }
+    // shuffle
+    for (var i = out.length - 1; i > 0; i--) { var j = Math.floor(Math.random() * (i + 1)); var t = out[i]; out[i] = out[j]; out[j] = t; }
+    return out.slice(0, 3);
+  }
+  function survApplyCard(c) {
+    if (!c) return;
+    if (c.def.kind === "weapon") surv.weapons[c.id] = (surv.weapons[c.id] || 0) + 1;
+    else if (c.id === "soup") { bio.hearts = Math.min(bio.maxHearts, bio.hearts + 1); bioShowBanner("🍲 回复 1 心", 1.4); }
+    else if (c.id === "fur") {
+      surv.passives.fur = 1; bio.maxHearts = Math.min(5, bio.maxHearts + 1);
+      bio.hearts = Math.min(bio.maxHearts, bio.hearts + 1); bioShowBanner("🛡️ 厚皮毛 · 上限 +1", 1.6);
+    } else surv.passives[c.id] = (surv.passives[c.id] || 0) + 1;
+    survRefreshStats();
+  }
+  function survEnsurePickUI() {
+    if (survPickEl) return survPickEl;
+    var el = document.createElement("div");
+    el.id = "survPick"; el.className = "overlay hidden"; el.innerHTML = '<div class="panel surv-pick-panel"><h2>升级！选一张</h2><div class="surv-cards" id="survCards"></div></div>';
+    document.body.appendChild(el);
+    survPickEl = el; return el;
+  }
+  function survHidePick() {
+    if (surv) surv.picking = false;
+    var el = document.getElementById("survPick"); if (el) el.classList.add("hidden");
+  }
+  function survOpenPick() {
+    if (!surv || surv.picking) return;
+    var cards = survCardPool();
+    if (!cards.length) return;
+    surv.picking = true;
+    var el = survEnsurePickUI();
+    var box = el.querySelector("#survCards"); box.innerHTML = "";
+    cards.forEach(function (c) {
+      var b = document.createElement("button"); b.type = "button"; b.className = "surv-card";
+      b.innerHTML = "<div class=\"ic\">" + c.def.icon + "</div><div class=\"nm\">" + c.def.name + (c.once ? "" : (" Lv" + c.next)) + "</div><div class=\"ds\">" + c.def.desc(c.next) + "</div>";
+      b.addEventListener("click", function () {
+        survApplyCard(c); el.classList.add("hidden"); surv.picking = false;
+        // 若经验仍够连升
+        if (surv.xp >= survXpNeed(surv.level)) survAddXp(0);
+      });
+      box.appendChild(b);
+    });
+    el.classList.remove("hidden");
+  }
+  function survTryDash(wx, wy) {
+    if (!survActive() || surv.picking || surv.dashCd > 0 || surv.dashT > 0) return false;
+    var dx = wx - cat.x, dy = wy - cat.y, d = Math.sqrt(dx * dx + dy * dy);
+    if (d < 8) { dx = Math.cos(cat.facing) || 1; dy = Math.sin(cat.facing) || 0; d = 1; }
+    surv.dashUx = dx / d; surv.dashUy = dy / d; surv.dashT = SURV_DASH_DUR; surv.dashCd = SURV_DASH_CD;
+    bio.iFrames = Math.max(bio.iFrames, SURV_DASH_IFRAME);
+    buzz(12); feedback("wave");
+    return true;
+  }
+  function survDamageMouse(m, dmg) {
+    if (!m || !uniOk(m)) return false;
+    dmg = dmg || 1;
+    if (!m.mutant) {
+      // 普鼠：直接击杀（AutoPounce / 武器）
+      var idx = mice.indexOf(m); if (idx < 0) return false;
+      m._survXpDone = false; onCapture(m); recycleMouse(idx); return true;
+    }
+    if (m.hitInv > 0) return false;
+    m.hp = (m.hp == null ? 2 : m.hp) - dmg; m.hitInv = 0.25; m.flash = 0.3;
+    if (m.hp <= 0) { var i2 = mice.indexOf(m); if (i2 >= 0) { m._survXpDone = false; onCapture(m); recycleMouse(i2); } return true; }
+    buzz(6); return false;
+  }
+  function survNearestMice(n, r) {
+    var arr = [];
+    for (var i = 0; i < mice.length; i++) {
+      var m = mice[i]; if (!uniOk(m)) continue;
+      var d = distance(m.x, m.y, cat.x, cat.y); if (d <= r) arr.push({ m: m, d: d });
+    }
+    arr.sort(function (a, b) { return a.d - b.d; });
+    return arr.slice(0, n);
+  }
+  function survAutoPounce() {
+    var list = survNearestMice(1, SURV_AUTO_R * entityScaleMult);
+    if (!list.length) return;
+    var m = list[0].m;
+    survDamageMouse(m, 1);
+    sigFxAdd({ type: "ring", x: m.x, y: m.y, r: 18, col: "rgba(255,180,80,", life: 0.25 });
+    cat.squash = 1; buzz(8);
+  }
+  function survFireChain() {
+    var lv = survWeapLv("chain"); if (lv <= 0) return;
+    var list = survNearestMice(Math.min(5, lv), 160 * entityScaleMult);
+    for (var i = 0; i < list.length; i++) survDamageMouse(list[i].m, 1);
+  }
+  function survFireYarn() {
+    var lv = survWeapLv("yarn"); if (lv <= 0) return;
+    for (var i = 0; i < lv; i++) {
+      var a = cat.facing + (i - (lv - 1) / 2) * 0.35;
+      surv.yarn.push({ x: cat.x, y: cat.y, ux: Math.cos(a), uy: Math.sin(a), life: 0.7, hit: {} });
+    }
+  }
+  function survFireFear() {
+    var lv = survWeapLv("fear"); if (lv <= 0) return;
+    var R = (70 + lv * 18) * entityScaleMult, st = 0.8 + lv * 0.4;
+    for (var i = 0; i < mice.length; i++) {
+      var m = mice[i]; if (!uniOk(m)) continue;
+      if (distance(m.x, m.y, cat.x, cat.y) < R) stunM(m, st, "dizzy");
+    }
+    sigFxAdd({ type: "ring", x: cat.x, y: cat.y, r: R / entityScaleMult, col: "rgba(180,120,255,", life: 0.4 });
+  }
+  function survDirector(dt) {
+    if (!surv || surv.won || surv.picking) return;
+    var cycleT = elapsedPlayTime % CYCLE_T;
+    var cycleIdx = Math.floor(elapsedPlayTime / CYCLE_T);
+    // 教学低压
+    if (elapsedPlayTime < 90) surv.spawnMult = 0.55;
+    else if (dayNow.phase === "dusk") surv.spawnMult = 1.2;
+    else if (dayNow.phase === "night") surv.spawnMult = 1.85;
+    else surv.spawnMult = 1.0;
+    // 黄昏恐慌波：每循环一次
+    var panicKey = cycleIdx;
+    if (dayNow.phase === "dusk" && cycleT >= DAY_T + 1 && !surv.panicDone) {
+      surv.panicDone = true;
+      var ang = Math.random() * Math.PI * 2, dist = 280 * entityScaleMult;
+      for (var p = 0; p < 3; p++) {
+        var px = cat.x + Math.cos(ang) * (dist + p * 40), py = cat.y + Math.sin(ang) * (dist + p * 40);
+        spawnPack({ x: px, y: py }, 5, survTimeT());
+      }
+      bioShowBanner("⚠ 鼠潮来袭！", 2.0); buzz(20);
+    }
+    if (dayNow.phase === "day") surv.panicDone = false;
+    // 夜数涨心：进入 night 且 nightCount 增加时（bioUpdate 已计 nightCount）
+    if (bio.nightCount > surv.nightSeen) {
+      surv.nightSeen = bio.nightCount;
+      var want = Math.min(5, 3 + bio.nightCount);
+      if (want > bio.maxHearts) {
+        bio.maxHearts = want; bio.hearts = Math.min(bio.maxHearts, bio.hearts + 1);
+        bioShowBanner("上限 +1 · 现在 " + bio.maxHearts + " 心", 2.0);
+      }
+    }
+    // 黎明胜利（完成配置循环数）
+    if (elapsedPlayTime >= survRunDur() - 0.05) {
+      surv.won = true; bioDeath = null;
+      // 溃逃
+      for (var i = 0; i < mice.length; i++) startFlee(mice[i], 1);
+      score += 2000;
+      bioShowBanner("🌅 黎明到了！", 2.5);
+      setTimeout(function () { if (state === STATE_PLAY) enterResult(); }, 1200);
+    }
+  }
+  function survUpdate(dt) {
+    if (!survActive() || state !== STATE_PLAY) return;
+    if (surv.picking) return;
+    if (surv.invuln) bio.iFrames = Math.max(bio.iFrames, 1);
+    surv.dashCd = Math.max(0, surv.dashCd - dt);
+    surv.autoCd = Math.max(0, surv.autoCd - dt);
+    surv.chainT -= dt; surv.fearT -= dt;
+    // dash move
+    if (surv.dashT > 0) {
+      surv.dashT -= dt;
+      var step = SURV_DASH_SPD * entityScaleMult * dt;
+      cat.x += surv.dashUx * step; cat.y += surv.dashUy * step; cat.facing = Math.atan2(surv.dashUy, surv.dashUx);
+      var ob = queryNearbyObstacles(cat.x, cat.y); for (var j = 0; j < ob.length; j++) resolveCircleAabb(cat, ob[j]); if (TERR) TERR.push(cat);
+      for (var i = 0; i < mice.length; i++) {
+        var m = mice[i]; if (!uniOk(m)) continue;
+        if (distance(m.x, m.y, cat.x, cat.y) < 50 * entityScaleMult) {
+          m.vx = surv.dashUx * 320; m.vy = surv.dashUy * 320; m.stun = Math.max(m.stun || 0, 0.25);
+        }
+      }
+    }
+    // AutoPounce
+    if (!surv.autoOff && surv.autoCd <= 0 && surv.dashT <= 0) {
+      surv.autoCd = SURV_AUTO_CD0 * surv.tempo;
+      survAutoPounce();
+    }
+    // weapons
+    var clv = survWeapLv("chain");
+    if (clv > 0 && surv.chainT <= 0) { surv.chainT = (4 - clv * 0.25) * surv.tempo; survFireChain(); }
+    var ylv = survWeapLv("yarn");
+    if (ylv > 0) {
+      // fire timer stored in passives yarnT
+      surv._yarnT = (surv._yarnT || 0) - dt;
+      if (surv._yarnT <= 0) { surv._yarnT = 3 * surv.tempo; survFireYarn(); }
+    }
+    var flv = survWeapLv("fear");
+    if (flv > 0 && surv.fearT <= 0) { surv.fearT = 8 * surv.tempo; survFireFear(); }
+    // yarn projectiles
+    for (i = surv.yarn.length - 1; i >= 0; i--) {
+      var y = surv.yarn[i]; y.life -= dt; y.x += y.ux * 420 * entityScaleMult * dt; y.y += y.uy * 420 * entityScaleMult * dt;
+      for (var k = 0; k < mice.length; k++) {
+        var mm = mice[k]; if (!uniOk(mm) || y.hit[mm.seed]) continue;
+        if (distance(mm.x, mm.y, y.x, y.y) < 22 * entityScaleMult) { y.hit[mm.seed] = 1; survDamageMouse(mm, 1); }
+      }
+      if (y.life <= 0) surv.yarn.splice(i, 1);
+    }
+    // gems
+    var pickR = 42 * entityScaleMult * surv.magnet;
+    for (i = surv.gems.length - 1; i >= 0; i--) {
+      var g = surv.gems[i]; g.age += dt;
+      if (g.age > g.life) { surv.gems.splice(i, 1); continue; }
+      var dg = distance(g.x, g.y, cat.x, cat.y);
+      if (dg < pickR * 2.2) { // magnet pull
+        var pull = Math.min(1, dt * (2.5 + surv.magnet)); g.x += (cat.x - g.x) * pull; g.y += (cat.y - g.y) * pull;
+      }
+      if (dg < pickR * 0.55 || distance(g.x, g.y, cat.x, cat.y) < 18 * entityScaleMult) {
+        survAddXp(g.v); surv.gems.splice(i, 1); buzz(4);
+      }
+    }
+    if (surv.gems.length > SURV_GEM_MERGE) {
+      // merge farthest half into one big
+      surv.gems.sort(function (a, b) { return distance(b.x, b.y, cat.x, cat.y) - distance(a.x, a.y, cat.x, cat.y); });
+      var mergeN = Math.min(12, surv.gems.length - 20), sum = 0, mx = 0, my = 0;
+      for (i = 0; i < mergeN; i++) { sum += surv.gems[i].v; mx += surv.gems[i].x; my += surv.gems[i].y; }
+      surv.gems.splice(0, mergeN);
+      if (sum > 0) surv.gems.push({ x: mx / mergeN, y: my / mergeN, v: sum, age: 0, life: SURV_GEM_LIFE_DAY, merge: true });
+    }
+    // contact damage: any mouse close
+    var biting = false;
+    for (i = 0; i < mice.length; i++) {
+      m = mice[i]; if (!uniOk(m) || m.type === "gold") continue;
+      if (distance(m.x, m.y, cat.x, cat.y) < SURV_CONTACT_R * entityScaleMult + cat.r) { biting = true; break; }
+    }
+    if (biting && bio.iFrames <= 0) {
+      surv.contactT += dt;
+      if (surv.contactT >= SURV_CONTACT_WIND) { surv.contactT = -SURV_CONTACT_CD; bioTakeBite(); if (bioDeath) bioDeath = "horde"; }
+    } else if (surv.contactT > 0) surv.contactT = Math.max(0, surv.contactT - dt * 2);
+    else if (surv.contactT < 0) surv.contactT = Math.min(0, surv.contactT + dt); // CD 倒数
+
+    survDirector(dt);
+  }
+  function survDraw() {
+    if (!survActive()) return;
+    // gems
+    for (var i = 0; i < surv.gems.length; i++) {
+      var g = surv.gems[i], sx = worldToScreenX(g.x), sy = worldToScreenY(g.y);
+      if (sx < -20 || sx > W + 20 || sy < -20 || sy > H + 20) continue;
+      var al = g.age > g.life - 2 ? Math.max(0.2, (g.life - g.age) / 2) : 1;
+      emojiQuick(g.merge || g.v >= 8 ? "🐟" : "🐟", sx, sy - s(4), s(g.merge || g.v >= 5 ? 16 : 12), al);
+    }
+    // yarn
+    for (i = 0; i < surv.yarn.length; i++) {
+      var y = surv.yarn[i]; emojiQuick("🧶", worldToScreenX(y.x), worldToScreenY(y.y), s(14), Math.min(1, y.life * 2));
+    }
+    // dash CD ring at feet
+    if (surv.dashCd > 0 || surv.dashT > 0) {
+      var csx = worldToScreenX(cat.x), csy = worldToScreenY(cat.y) + s(14);
+      var fr = 1 - surv.dashCd / SURV_DASH_CD; if (surv.dashT > 0) fr = 1;
+      ctx.strokeStyle = "rgba(255,220,120,.85)"; ctx.lineWidth = s(3);
+      ctx.beginPath(); ctx.arc(csx, csy, s(20), -Math.PI / 2, -Math.PI / 2 + fr * 6.283); ctx.stroke();
+    }
+    // level chip
+    ctx.globalAlpha = 0.9; ctx.fillStyle = "rgba(40,24,16,.55)";
+    ctx.beginPath(); if (ctx.roundRect) ctx.roundRect(14, 72, 86, 22, 10); else ctx.rect(14, 72, 86, 22); ctx.fill();
+    ctx.fillStyle = "#ffe6b0"; ctx.font = "800 12px sans-serif"; ctx.textAlign = "left";
+    ctx.fillText("Lv" + surv.level + "  " + Math.floor(surv.xp) + "/" + survXpNeed(surv.level), 22, 87);
+    ctx.globalAlpha = 1;
+  }
+
   function update(dt) {
     updateMusic();
     if (state === STATE_PLAY) {
+      if (survActive() && surv.picking) { updateHud(); return; } // 选卡暂停世界
       elapsedPlayTime += dt;
       var sdt = dt; if (hitStopT > 0) { hitStopT -= dt; sdt = dt * 0.12; } // 命中停顿：只放慢动作，不影响计时
       updateCat(sdt);
       nestUpdate(dt);
       bioUpdate(sdt);
-      sigUpdate(sdt);
+      if (!SURV_ON) sigUpdate(sdt);
       uniUpdate(sdt);
       updateAbilities(sdt);
+      survUpdate(sdt);
       updateCamera(dt);
       ensureChunksAround(camera.x, camera.y);
       pruneFarChunks(dt, camera.x, camera.y);
@@ -4575,6 +4960,7 @@
     sigDrawUnder();
     drawMice();
     drawAbilityBehindCat();
+    if (typeof survDraw === "function") survDraw();
     drawCat();
     drawTrees();
     drawAbilityOverlay();
@@ -4824,6 +5210,39 @@
     nearestNest: function () { var b=null,bd=1e9; nests.forEach(function(n){ if(!n.alive)return; var d=distance(n.x,n.y,cat.x,cat.y); if(d<bd){bd=d;b=n;} }); return b?{x:b.x,y:b.y,infected:!!b.infected,hitsLeft:b.hitsLeft,maxHits:b.maxHits}:null; },
     lockNearestNest: function () { var b=null,bd=1e9; nests.forEach(function(n){ if(!n.alive||n.destroying)return; var d=distance(n.x,n.y,cat.x,cat.y); if(d<bd){bd=d;b=n;} }); if(b) setNestLock(b); return !!b; },
     hitNearestNest: function () { var b=null,bd=1e9; nests.forEach(function(n){ if(!n.alive)return; var d=distance(n.x,n.y,cat.x,cat.y); if(d<bd){bd=d;b=n;} }); if(b) return hitNest(b); },
+    survDash: function (dx, dy) { if (!survActive()) return false; if (surv.picking) return false; return survTryDash(cat.x + (dx == null ? 120 : dx), cat.y + (dy || 0)); },
+    survSkipTo: function (sec) {
+      if (!survActive()) return;
+      survHidePick();
+      elapsedPlayTime = Math.max(0, sec); dayNow = dayInfo();
+      // 预热夜计数：已过的夜按循环估算，避免 skip 丢成长
+      var nights = 0; for (var c = 0; c < SURV_CYCLES; c++) { var base = c * CYCLE_T; if (elapsedPlayTime >= base + DAY_T + DUSK_T) nights++; }
+      if (nights > bio.nightCount) {
+        bio.nightCount = nights; bio.wasNight = dayNow.night > 0.5;
+        var want = Math.min(5, 3 + bio.nightCount);
+        if (want > bio.maxHearts) { bio.maxHearts = want; bio.hearts = Math.min(bio.maxHearts, bio.hearts + 1); }
+        surv.nightSeen = bio.nightCount;
+      }
+    },
+    survForceLevel: function () { if (!survActive()) return; surv.xp = survXpNeed(surv.level); survAddXp(0); },
+    survGod: function (on) { if (!surv) return; surv.invuln = on !== false; if (!surv.invuln) bio.iFrames = 0; },
+    survHurt: function (n) {
+      if (!survActive()) return bio.hearts;
+      var times = Math.max(1, n == null ? 1 : n | 0);
+      for (var i = 0; i < times; i++) {
+        if (state !== STATE_PLAY) break;
+        bio.iFrames = 0; surv.invuln = false; surv.contactT = SURV_CONTACT_WIND;
+        bioTakeBite(); if (bioDeath) bioDeath = "horde";
+      }
+      return bio.hearts;
+    },
+    survDisarm: function () {
+      if (!surv) return;
+      surv.weapons = {}; surv.autoOff = true; surv.autoCd = 9999; surv.chainT = 9999; surv.fearT = 9999; surv.yarn = [];
+    },
+    survSetCycles: function (n) { SURV_CYCLES = Math.max(1, n|0); },
+    get surv() { return surv ? { level: surv.level, xp: surv.xp, kills: surv.kills, gems: surv.gems.length, dashCd: surv.dashCd, weapons: Object.assign({}, surv.weapons), passives: Object.assign({}, surv.passives), won: surv.won, cycles: SURV_CYCLES, spawnMult: surv.spawnMult } : null; },
+
     forceBiteCheck: function () { return { biteR: BIO_BITE_R, infectR: BIO_INFECT_R, esm: entityScaleMult }; },
     resetNestInfection: function () { nests.forEach(function(n){ n.infected=false; n.infectFlash=0; }); },
     placeMutantAt: function(x,y){ var m=spawnMouseAt(x,y,"grey",currentDifficulty(),"wander"); m.mutant=true; m.hp=2; bio.seen=true; return {x:m.x,y:m.y}; },
