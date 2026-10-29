@@ -33,7 +33,7 @@
   var DIFFICULTY_TIME_CAP = 300;
   // v23：公开展示仅守卫战（完整模块见下方 SURVIVORS M1）
   var SURV_ON = true;
-  var SURV_CYCLES = 1;
+  var SURV_CYCLES = 3;
 
   var COMBO_WINDOW = 2.5;
   var COMBO_MAX_MULT = 2.5;
@@ -889,13 +889,18 @@
     for (var i = mice.length - 1; i >= 0; i--) {
       var m = mice[i];
       m.r = MOUSE_RADIUS * esm;
-      if (m.hidden) continue; // 在纸箱/雪球里
+      if (m.hidden || m.survCtl) continue; // 在纸箱/雪球里 / 守卫战自控（鼠王/小偷）
       var dToCat = distance(m.x, m.y, cat.x, cat.y);
       if (dToCat > cullR) { recycleMouse(i); continue; }
       // 守卫战：近距主动贴猫（金鼠除外）
-      if (SURV_ON && m.type !== "gold" && !(m.stun > 0) && !(m.pullT > 0) && dToCat < 210 * esm && dToCat > 8) {
-        var ch = normalize(cat.x - m.x, cat.y - m.y), spd = (m.type === "brown" ? 1.35 : 1.0) * 95 * esm;
+      if (SURV_ON && m.type !== "gold" && !(m.stun > 0) && !(m.pullT > 0) && dToCat < (m.elite || m.mutant ? 700 : 210) * esm && dToCat > 8) {
+        var ch = normalize(cat.x - m.x, cat.y - m.y), spd = (m.type === "brown" ? 1.35 : 1.0) * 95 * esm * (m.hasteT > 0 || m.elite === "haste" ? 1.45 : 1);
+        if (m.biting) spd *= 1.6;
         m.vx = ch.x * spd; m.vy = ch.y * spd; m.state = "wander";
+        m.x += m.vx * dt; m.y += m.vy * dt; if (TERR) TERR.push(m);
+        m.facing = Math.atan2(m.vy, m.vx); m.runCycle += dt * 2.2;
+        if (m.flash > 0 && !m.mutant) m.flash -= dt;
+        continue;
       }
       // LOD：屏幕外且远离猫的老鼠 AI 每秒只更新 10 次
       var off = Math.abs(m.x - camera.x) > hw || Math.abs(m.y - camera.y) > hh;
@@ -1258,7 +1263,7 @@
     arr.sort(function (a, b) { return a[0] - b[0]; });
     return arr.slice(0, n).map(function (a) { return a[1]; });
   }
-  function stunM(m, t, kind) { if (!m || m.hidden) return; if (!(m.stun > 0)) skillSfx("hit"); m.stun = Math.max(m.stun || 0, t); m.stunKind = kind; m.state = "wander"; }
+  function stunM(m, t, kind) { if (!m || m.hidden || m.boss || m.shieldT > 0 || m.elite === "shield") return; if (!(m.stun > 0)) skillSfx("hit"); m.stun = Math.max(m.stun || 0, t); m.stunKind = kind; m.state = "wander"; }
   function pullM(m, x, y, speed, t) { m.pullX = x; m.pullY = y; m.pullV = speed; m.pullT = t; }
   function fx(kind, x, y, life, extra) { if (ab.fx.length > 60) ab.fx.shift(); var f = { k: kind, x: x, y: y, age: 0, life: life }; for (var q in extra) f[q] = extra[q]; ab.fx.push(f); }
   function mouthPoint(dist) { return { x: cat.x + Math.cos(cat.facing) * dist, y: cat.y + Math.sin(cat.facing) * dist }; }
@@ -2647,14 +2652,14 @@
       var v = vis[k]; m = v.m; sx = v.sx; sy = v.sy; tellNear = v.d <= cut20;
       if (!m.anim) m.anim = newAnim();
       m.lodFull = v.full; if (v.full) drawStats.full++;
-      var r = s(m.r), u = r * MOUSE_UNIT_PER_R, d = ANIM.DIR8[m.anim.dir];
+      var r = s(m.r) * (m.boss ? 2.8 : m.elite ? 1.45 : 1), u = r * MOUSE_UNIT_PER_R, d = ANIM.DIR8[m.anim.dir];
       var st = animFrame(m.anim, m.runCycle * 1.4, MOUSE_SIT_SCHED);
       if (!v.full && st[0] === "run") st = ["run", st[1] & 2]; // 远处只用 2 帧
       if (!v.full && st[0] === "sit") st = ["sit", 2];
       var ox = 0;
       if (m.cornerT > 0 || m.trem > 0 || (m.beh === "timid" && m.state === "flee" && v.full)) ox = Math.sin(elapsedPlayTime * 60) * 2 * u;
       if (m.asleep) st = ["sit", 2];
-      if (dayNow.night > 0.5 && mouseInDark(m)) { var ea = 0.5 + 0.5 * dayNow.night; var blk = Math.sin(elapsedPlayTime * 2.3 + m.seed * 11) > 0.96; if (!blk) { var gw = glowSprite(), gs = s(9); if (resScale >= 1) { ctx.globalAlpha = ea; ctx.drawImage(gw, sx - 5 * u - gs / 2, sy - 8 * u - gs / 2, gs, gs); ctx.drawImage(gw, sx + 5 * u - gs / 2, sy - 8 * u - gs / 2, gs, gs); ctx.globalAlpha = 1; } ctx.fillStyle = "#fff8c0"; ctx.beginPath(); ctx.arc(sx - 5 * u, sy - 8 * u, s(1.6), 0, 7); ctx.arc(sx + 5 * u, sy - 8 * u, s(1.6), 0, 7); ctx.fill(); } continue; }
+      if (dayNow.night > 0.5 && !m.boss && !m.elite && mouseInDark(m)) { var ea = 0.5 + 0.5 * dayNow.night; var blk = Math.sin(elapsedPlayTime * 2.3 + m.seed * 11) > 0.96; if (!blk) { var gw = glowSprite(), gs = s(9); if (resScale >= 1) { ctx.globalAlpha = ea; ctx.drawImage(gw, sx - 5 * u - gs / 2, sy - 8 * u - gs / 2, gs, gs); ctx.drawImage(gw, sx + 5 * u - gs / 2, sy - 8 * u - gs / 2, gs, gs); ctx.globalAlpha = 1; } ctx.fillStyle = "#fff8c0"; ctx.beginPath(); ctx.arc(sx - 5 * u, sy - 8 * u, s(1.6), 0, 7); ctx.arc(sx + 5 * u, sy - 8 * u, s(1.6), 0, 7); ctx.fill(); } continue; }
       if (!dbgDraw.noSprite && !paintedMouse(m.type, sx + ox, sy, u, d[0], d[1], st, m.runCycle)) blit(ANIM.mouseSprite(m.type, d[0], st[0], st[1], spritePx(u)), sx + ox, sy, u, d[1]);
       drawMutantTint(m, sx + ox, sy, u);
       if (!dbgDraw.noTell && (v.full || m.type === "gold" || m.packId)) drawTell(m, sx + ox, sy, u, st, v.full, v.i);
@@ -3339,7 +3344,7 @@
     if (typeof survHidePick === "function") survHidePick();
     hideScreen(dom.hud); var mm2 = document.getElementById("miniMap"); if (mm2) mm2.classList.add("hidden");
     var deathMutant = bioDeath === "mutant";
-    var deathHorde = bioDeath === "horde";
+    var deathHorde = bioDeath === "horde" || bioDeath === "boss";
     var won = survActive() && surv && surv.won;
     bioDeath = null;
     if (SURV_ON && surv) {
@@ -3355,7 +3360,7 @@
     dom.resultCombo.textContent = String(comboMax);
     dom.resultBest.textContent = String(best);
     var rh = dom.resultScreen && dom.resultScreen.querySelector("h2");
-    if (rh) rh.textContent = won ? "黎明到了！" : (deathHorde ? "被鼠潮围咬了…" : (deathMutant ? "被变异鼠搞定了…" : "本局结算"));
+    if (rh) rh.textContent = won ? (surv && surv.bossKilled ? "击败鼠王！黎明到了！" : "黎明到了！") : (deathHorde ? "被鼠潮围咬了…" : (deathMutant ? "被变异鼠搞定了…" : "本局结算"));
     if (SURV_ON && surv) {
       dom.resultRankStatus.textContent = won
         ? ("通关 · Lv" + surv.level + " · 击杀 " + surv.kills + " · 守卫榜尚未开放（本地局）")
@@ -3634,7 +3639,7 @@
     if (beh === "flock") { var k = 4 + Math.floor(Math.random() * 5); spawnPack({ x: x, y: y }, k, t); for (var j = mice.length - k; j < mice.length; j++) if (mice[j]) { mice[j].nest = n; mice[j].home = n; applyMutantRoll(mice[j], n); } n.owned += k; return; }
     var m = spawnMouseAt(x, y, typeForBeh(beh, t), t, beh); m.nest = n; m.home = n; if (beh === "burrow") m.hole = { x: n.x, y: n.y }; applyMutantRoll(m, n); n.owned++;
   }
-  function mouseCap() { return dayNow.night > 0 && resScale > 0.6 ? Math.round(lerp(180, NIGHT_CAP, dayNow.night)) : 180; }
+  function mouseCap() { if (SURV_ON && survIsWeak()) return 120; return dayNow.night > 0 && resScale > 0.6 ? Math.round(lerp(180, NIGHT_CAP, dayNow.night)) : 180; }
   function nestSpawn(dt) {
     if (noSpawn) return;
     var t = currentDifficulty(), R = viewRadiusWorld() + 300, cap = mouseCap();
@@ -4433,7 +4438,8 @@
   function bioCatStunned() { return !!nestPoopAnim; }
   function bioTakeBite() {
     if (bio.iFrames > 0 || nestPoopAnim) return;
-    bio.hearts = Math.max(0, bio.hearts - 1); bio.iFrames = 0.8; hitStopT = Math.max(hitStopT, 0.08);
+    bio.hearts = Math.max(0, bio.hearts - 1); bio.iFrames = 0.8 + (SURV_ON && surv ? survPassLv("armor") * 0.15 : 0);
+    if (SURV_ON && surv && surv.dmgSrc) { survNoteDmg(survPendingSrc || "变异鼠咬"); survPendingSrc = null; } hitStopT = Math.max(hitStopT, 0.08);
     feedback("wave"); buzz(30);
     if (bio.hearts <= 0) {
       if (!bioDeath) bioDeath = SURV_ON ? "horde" : "mutant";
@@ -4451,7 +4457,7 @@
     bio.blood = night && (ir >= 0.5 || catches >= 80) && bio.nightCount >= 1;
     // 变异鼠：感染窝 + 咬猫
     for (var i = 0; i < mice.length; i++) {
-      var m = mice[i]; if (!m.mutant || !uniOk(m)) continue;
+      var m = mice[i]; if (!m.mutant || !uniOk(m) || m.boss) continue;
       if (m.hitInv > 0) m.hitInv -= dt;
       if (m.flash > 0) m.flash -= dt;
       if (m.biteCd > 0) m.biteCd -= dt;
@@ -4460,7 +4466,7 @@
         // 轻量：朝窝走时用 infect 行为
       }
       // 感染：锁定最近普通窝；靠近累计 / 钻入即染
-      if (!m.infectTarget || !m.infectTarget.alive || m.infectTarget.infected) {
+      if (m.noInfect) { m.infectTarget = null; } else if (!m.infectTarget || !m.infectTarget.alive || m.infectTarget.infected) {
         var best = null, bd = 1e9;
         for (var j = 0; j < nests.length; j++) { var n0 = nests[j]; if (!n0.alive || n0.infected) continue; var dd = distance(m.x, m.y, n0.x, n0.y); if (dd < bd) { bd = dd; best = n0; } }
         m.infectTarget = best; m.infectAcc = 0;
@@ -4592,6 +4598,7 @@
       soup: { name: "鱼汤", icon: "🍲", kind: "passive", desc: function (lv) { return "立刻回复 1 心"; } }
     };
   }
+  function survAllDefs() { var W = survWeaponDefs(), P = survPassiveDefs(); survAddDefs(W, P); return { W: W, P: P }; }
   function survReset() {
     surv = {
       level: 1, xp: 0, kills: 0, gems: [], weapons: {}, passives: {},
@@ -4601,10 +4608,11 @@
       moveSp: 1, magnet: 1, tempo: 1, invuln: false, autoOff: false
     };
     surv.weapons.chain = 1; // 开局自带一件通用武，保证有输出反馈
+    survM2Reset();
     survHidePick();
   }
   function survActive() { return SURV_ON && !!surv; }
-  function survRunDur() { return CYCLE_T * SURV_CYCLES; }
+  function survRunDur() { return SURV_CYCLES >= 3 ? SURV_BOSS_AT + SURV_BOSS_SURVIVE + 5 : CYCLE_T * SURV_CYCLES; }
   function survTimeT() { return clamp01(elapsedPlayTime / Math.max(1, survRunDur())); }
   function survPassLv(id) { return (surv && surv.passives[id]) || 0; }
   function survWeapLv(id) { return (surv && surv.weapons[id]) || 0; }
@@ -4623,11 +4631,14 @@
     surv.kills++;
     var v = m.type === "gold" ? 8 : m.type === "brown" ? 3 : 1;
     if (m.mutant) v = 12;
-    survDropGem(m.x, m.y, v);
+    if (m.elite) v = 30;
+    if (m.boss) v = 0;
+    if (v > 0) survDropGem(m.x, m.y, v);
+    survM2OnKill(m);
   }
   function survAddXp(v) {
     if (!surv || surv.picking) return;
-    surv.xp += v;
+    surv.xp += v * (1 + survPassLv("growth") * 0.1);
     var guard = 0;
     while (surv.xp >= survXpNeed(surv.level) && guard++ < 8) {
       surv.xp -= survXpNeed(surv.level);
@@ -4637,12 +4648,12 @@
     }
   }
   function survCardPool() {
-    var W = survWeaponDefs(), P = survPassiveDefs(), out = [];
-    var wCount = 0; for (var k in surv.weapons) if (surv.weapons[k] > 0) wCount++;
+    var AD = survAllDefs(), W = AD.W, P = AD.P, out = [];
+    var wCount = 0; for (var k in surv.weapons) if (surv.weapons[k] > 0 && k !== "main") wCount++;
     var pCount = 0; for (k in surv.passives) if (surv.passives[k] > 0 && k !== "soup") pCount++;
     for (k in W) {
       var lv = survWeapLv(k);
-      if (lv <= 0 && wCount >= 2) continue;
+      if (lv <= 0 && wCount >= 3) continue; // 通用武器槽 3 + 招牌
       if (lv >= 5) continue;
       out.push({ id: k, def: W[k], lv: lv, next: lv + 1 });
     }
@@ -4650,16 +4661,18 @@
       lv = survPassLv(k);
       if (k === "fur" && lv >= 1) continue;
       if (k === "soup") { out.push({ id: k, def: P[k], lv: 0, next: 1, once: true }); continue; }
-      if (lv <= 0 && pCount >= 3) continue;
+      if (lv <= 0 && pCount >= 4) continue; // 被动槽 4
       if (lv >= 5) continue;
       out.push({ id: k, def: P[k], lv: lv, next: lv + 1 });
     }
     // shuffle
     for (var i = out.length - 1; i > 0; i--) { var j = Math.floor(Math.random() * (i + 1)); var t = out[i]; out[i] = out[j]; out[j] = t; }
+    out = survAwakCards(false).concat(out);
     return out.slice(0, 3);
   }
   function survApplyCard(c) {
     if (!c) return;
+    if (c.awk) { surv.awak[c.awk] = 1; bioShowBanner("✨ " + c.def.name, 2); survRefreshStats(); return; }
     if (c.def.kind === "weapon") surv.weapons[c.id] = (surv.weapons[c.id] || 0) + 1;
     else if (c.id === "soup") { bio.hearts = Math.min(bio.maxHearts, bio.hearts + 1); bioShowBanner("🍲 回复 1 心", 1.4); }
     else if (c.id === "fur") {
@@ -4679,12 +4692,13 @@
     if (surv) surv.picking = false;
     var el = document.getElementById("survPick"); if (el) el.classList.add("hidden");
   }
-  function survOpenPick() {
+  function survOpenPick(forced, title) {
     if (!surv || surv.picking) return;
-    var cards = survCardPool();
+    var cards = forced || survCardPool();
     if (!cards.length) return;
     surv.picking = true;
     var el = survEnsurePickUI();
+    var h2 = el.querySelector("h2"); if (h2) h2.textContent = title || "升级！选一张";
     var box = el.querySelector("#survCards"); box.innerHTML = "";
     cards.forEach(function (c) {
       var b = document.createElement("button"); b.type = "button"; b.className = "surv-card";
@@ -4692,7 +4706,8 @@
       b.addEventListener("click", function () {
         survApplyCard(c); el.classList.add("hidden"); surv.picking = false;
         // 若经验仍够连升
-        if (surv.xp >= survXpNeed(surv.level)) survAddXp(0);
+        if (surv.chestQ > 0) { surv.chestQ--; survOpenChest(); }
+        else if (surv.xp >= survXpNeed(surv.level)) survAddXp(0);
       });
       box.appendChild(b);
     });
@@ -4702,7 +4717,7 @@
     if (!survActive() || surv.picking || surv.dashCd > 0 || surv.dashT > 0) return false;
     var dx = wx - cat.x, dy = wy - cat.y, d = Math.sqrt(dx * dx + dy * dy);
     if (d < 8) { dx = Math.cos(cat.facing) || 1; dy = Math.sin(cat.facing) || 0; d = 1; }
-    surv.dashUx = dx / d; surv.dashUy = dy / d; surv.dashT = SURV_DASH_DUR; surv.dashCd = SURV_DASH_CD;
+    surv.dashUx = dx / d; surv.dashUy = dy / d; surv.dashT = SURV_DASH_DUR; surv.dashCd = Math.max(1.2, SURV_DASH_CD - survPassLv("dashp") * 0.3);
     bio.iFrames = Math.max(bio.iFrames, SURV_DASH_IFRAME);
     buzz(12); feedback("wave");
     return true;
@@ -4739,13 +4754,14 @@
   }
   function survFireChain() {
     var lv = survWeapLv("chain"); if (lv <= 0) return;
-    var list = survNearestMice(Math.min(5, lv), 160 * entityScaleMult);
+    var list = survNearestMice(Math.min(5, lv) * (surv.awak && surv.awak.chain ? 2 : 1), 160 * entityScaleMult);
     for (var i = 0; i < list.length; i++) survDamageMouse(list[i].m, 1);
   }
   function survFireYarn() {
     var lv = survWeapLv("yarn"); if (lv <= 0) return;
-    for (var i = 0; i < lv; i++) {
-      var a = cat.facing + (i - (lv - 1) / 2) * 0.35;
+    var yn = lv + (surv.awak && surv.awak.yarn ? 2 : 0);
+    for (var i = 0; i < yn; i++) {
+      var a = cat.facing + (i - (yn - 1) / 2) * 0.35;
       surv.yarn.push({ x: cat.x, y: cat.y, ux: Math.cos(a), uy: Math.sin(a), life: 0.7, hit: {} });
     }
   }
@@ -4754,7 +4770,7 @@
     var R = (70 + lv * 18) * entityScaleMult, st = 0.8 + lv * 0.4;
     for (var i = 0; i < mice.length; i++) {
       var m = mice[i]; if (!uniOk(m)) continue;
-      if (distance(m.x, m.y, cat.x, cat.y) < R) stunM(m, st, "dizzy");
+      if (distance(m.x, m.y, cat.x, cat.y) < R) { if (surv.awak && surv.awak.fear && !m.mutant) survDamageMouse(m, 1); else stunM(m, st, "dizzy"); }
     }
     sigFxAdd({ type: "ring", x: cat.x, y: cat.y, r: R / entityScaleMult, col: "rgba(180,120,255,", life: 0.4 });
   }
@@ -4798,6 +4814,279 @@
       setTimeout(function () { if (state === STATE_PLAY) enterResult(); }, 1200);
     }
   }
+  // =======================================================================
+  // v24 SURVIVORS M2：3 循环 / 精英词缀 / 鼠王 / 宝箱 / 六猫主武 / 全池+觉醒 / 小偷鼠 / 弱机上限
+  // =======================================================================
+  var SURV_BOSS_AT = 580, SURV_BOSS_SURVIVE = 60, SURV_ELITE_AT = [150, 280, 400, 470, 520];
+  var SURV_MAIN = {
+    orange: { name: "橘风旋扑", sup: "猛虎扑杀", icon: "🌀", cd: 5, desc: function (lv) { return "每 " + (5 - lv * 0.4).toFixed(1) + "s 震开周围鼠并眩晕"; } },
+    black: { name: "影缚", sup: "暗影处决", icon: "🌑", cd: 4.5, desc: function (lv) { return "定身最近 " + (2 + lv) + " 只 1.5s"; } },
+    white: { name: "霜环", sup: "绝对零度", icon: "❄️", cd: 6, desc: function (lv) { return "冰冻周围 " + (1 + lv * 0.2).toFixed(1) + "s"; } },
+    calico: { name: "招财铃", sup: "金币雨", icon: "🔔", cd: 6, desc: function (lv) { return "吸来 " + (250 + lv * 50) + " 内鱼干并震晕近鼠"; } },
+    blue: { name: "重压", sup: "陨星压", icon: "💥", cd: 5.5, desc: function (lv) { return "砸地击退+眩晕 1s（半径 " + (90 + lv * 10) + "）"; } },
+    siamese: { name: "声波", sup: "裂空啸", icon: "📢", cd: 4, desc: function (lv) { return "前方声波定身 1.2s，长 " + (240 + lv * 20); } }
+  };
+  var SURV_AWAK = { // 通用觉醒：武器 Lv5 + 指定被动
+    chain: { need: "tempo", name: "雷霆连扑", icon: "⚡" },
+    yarn: { need: "magnet", name: "磁暴毛线", icon: "🧲" },
+    fear: { need: "armor", name: "夜王威压", icon: "👑" },
+    claw: { need: "speed", name: "千刃风", icon: "🗡️" },
+    bell: { need: "fur", name: "圣铃结界", icon: "🔔" },
+    milk: { need: "growth", name: "奶海", icon: "🥛" }
+  };
+  var SURV_AFFIX = {
+    haste: { name: "疾风", col: "rgba(120,220,255,", ic: "💨" },
+    shield: { name: "护盾", col: "rgba(255,230,120,", ic: "🛡️" },
+    regen: { name: "再生", col: "rgba(120,255,140,", ic: "💚" }
+  };
+  function survMainDef() { return SURV_MAIN[currentSkin] || SURV_MAIN.orange; }
+  function survIsWeak() { return resScale < 1 || (navigator.hardwareConcurrency || 8) <= 4 || (navigator.deviceMemory || 8) <= 3; }
+  function survM2Reset() {
+    surv.weapons.main = 1; surv.awak = {}; surv.chestsOnMap = []; surv.eliteDone = {}; surv.boss = null; surv.bossSpawned = false;
+    surv.bossKilled = false; surv.thiefT = 22; surv.mainT = 1.2; surv.clawT = 1; surv.bellA = 0; surv.milk = []; surv.milkT = 2;
+    surv.fx = []; surv.dmgSrc = {}; surv.lastHitBy = null; surv.chestOpen = false; surv.stolenTotal = 0;
+  }
+  function survAddDefs(W, P) {
+    var md = survMainDef();
+    W.main = { name: "招牌·" + md.name, icon: md.icon, kind: "weapon", main: true, desc: md.desc };
+    W.claw = { name: "利爪横扫", icon: "🐾", kind: "weapon", desc: function (lv) { return "前方扇形斩杀 " + (1 + lv) + " 只"; } };
+    W.bell = { name: "守护铃", icon: "🔔", kind: "weapon", desc: function (lv) { return lv + " 个环绕铃，碰到即击退眩晕"; } };
+    W.milk = { name: "牛奶滩", icon: "🥛", kind: "weapon", desc: function (lv) { return "脚下留奶滩，鼠踩上减速，半径 " + (60 + lv * 10); } };
+    P.armor = { name: "软垫", icon: "🧸", kind: "passive", desc: function (lv) { return "受伤无敌 +" + (lv * 0.15).toFixed(2) + "s"; } };
+    P.growth = { name: "学识", icon: "📖", kind: "passive", desc: function (lv) { return "经验 +" + (lv * 10) + "%"; } };
+    P.dashp = { name: "猫步", icon: "🐈", kind: "passive", desc: function (lv) { return "冲刺冷却 -" + (lv * 0.3).toFixed(1) + "s"; } };
+  }
+  function survAwakCards(includeMain) {
+    var out = [];
+    for (var k in SURV_AWAK) {
+      var a = SURV_AWAK[k];
+      if (survWeapLv(k) >= 5 && survPassLv(a.need) >= 1 && !surv.awak[k])
+        out.push({ id: "awk_" + k, awk: k, def: { name: "觉醒·" + a.name, icon: a.icon, kind: "awak", desc: function () { return "武器进化，可击杀"; } }, lv: 0, next: 1, once: true });
+    }
+    if (includeMain && survWeapLv("main") >= 5 && !surv.awak.main) {
+      var md = survMainDef();
+      out.unshift({ id: "awk_main", awk: "main", def: { name: "专属超武·" + md.sup, icon: "🌟", kind: "awak", desc: function () { return "招牌技能可直接击杀"; } }, lv: 0, next: 1, once: true });
+    }
+    return out;
+  }
+  function survChestCards() {
+    var aw = survAwakCards(true);
+    var AD = survAllDefs(), W = AD.W, P = AD.P, up = [];
+    for (var k in surv.weapons) if (surv.weapons[k] > 0 && surv.weapons[k] < 5 && W[k]) up.push({ id: k, def: W[k], lv: surv.weapons[k], next: surv.weapons[k] + 1 });
+    for (k in surv.passives) if (surv.passives[k] > 0 && surv.passives[k] < 5 && P[k] && k !== "fur") up.push({ id: k, def: P[k], lv: surv.passives[k], next: surv.passives[k] + 1 });
+    for (var i = up.length - 1; i > 0; i--) { var j = Math.floor(Math.random() * (i + 1)); var t = up[i]; up[i] = up[j]; up[j] = t; }
+    var out = aw.concat(up);
+    if (!out.length) out = [{ id: "soup", def: P.soup, lv: 0, next: 1, once: true }];
+    return out.slice(0, 3);
+  }
+  // ---- 精英 ----
+  function survSpawnElite(affix, at) {
+    var keys = Object.keys(SURV_AFFIX); affix = affix || keys[Math.floor(Math.random() * keys.length)];
+    var p = at || ringPointNear(260);
+    var m = spawnMouseAt(p.x, p.y, "brown", survTimeT(), "wander");
+    m.mutant = true; m.elite = affix; m.hp = m.maxHp = Math.round((10 + 14 * survTimeT()) * (affix === "shield" ? 1.6 : 1));
+    m.biteCd = 0; m.biting = false; m.infectAcc = 0; m.infectTarget = null; m.noInfect = true;
+    bioShowBanner("⚠ 精英鼠 · " + SURV_AFFIX[affix].name, 2); buzz(15);
+    return m;
+  }
+  function ringPointNear(r) {
+    for (var t = 0; t < 8; t++) { var a = Math.random() * 6.283, x = cat.x + Math.cos(a) * r * entityScaleMult, y = cat.y + Math.sin(a) * r * entityScaleMult; if (!inObstacle(x, y, 14)) return { x: x, y: y }; }
+    return { x: cat.x + r, y: cat.y };
+  }
+  // ---- 鼠王 ----
+  function survSpawnBoss() {
+    var p = ringPointNear(300);
+    var m = spawnMouseAt(p.x, p.y, "brown", 1, "wander");
+    m.mutant = true; m.boss = true; m.survCtl = true; m.noInfect = true; m.hp = m.maxHp = 260; m.phase = 1; m.bT = 3; m.charge = 0;
+    surv.boss = m; surv.bossSpawned = true; surv.bossAt = elapsedPlayTime;
+    bioShowBanner("👑 鼠王降临！击杀或坚持 " + SURV_BOSS_SURVIVE + "s", 3); buzz(40); shakeT = 0.3; shakeAmp = 6;
+  }
+  function survBossUpdate(dt) {
+    var b = surv.boss; if (!b) return;
+    if (mice.indexOf(b) < 0) { surv.boss = null; return; }
+    var esm = entityScaleMult, f = b.hp / b.maxHp;
+    var ph = f > 0.66 ? 1 : f > 0.33 ? 2 : 3;
+    if (ph !== b.phase) { b.phase = ph; bioShowBanner(ph === 2 ? "鼠王召唤鼠群！" : "鼠王狂暴！", 2); shakeT = 0.25; shakeAmp = 5; }
+    if (b.hitInv > 0) b.hitInv -= dt; if (b.flash > 0) b.flash -= dt;
+    if (b.regenT > 0) b.regenT -= dt;
+    var dx = cat.x - b.x, dy = cat.y - b.y, d = Math.sqrt(dx * dx + dy * dy) || 1;
+    var sp = (ph === 3 ? 125 : 85) * esm;
+    if (b.charge > 0) { b.charge -= dt; b.x += b.cux * 430 * esm * dt; b.y += b.cuy * 430 * esm * dt; }
+    else if (b.wind > 0) { b.wind -= dt; if (b.wind <= 0) { b.charge = 0.55; b.cux = dx / d; b.cuy = dy / d; } }
+    else { b.x += dx / d * sp * dt; b.y += dy / d * sp * dt; }
+    if (TERR) TERR.push(b);
+    b.vx = dx / d; b.vy = dy / d; b.facing = Math.atan2(dy, dx); b.runCycle += dt * 3;
+    b.bT -= dt;
+    if (b.bT <= 0) {
+      if (ph === 1) { b.wind = 0.7; b.bT = 5; }
+      else if (ph === 2) { b.bT = 6; for (var i = 0; i < 8 && mice.length < mouseCap(); i++) { var a = i / 8 * 6.283; spawnMouseAt(b.x + Math.cos(a) * 40, b.y + Math.sin(a) * 40, "grey", 1, "wander"); } b.wind = 0.7; }
+      else { b.bT = 4; b.wind = 0.5; surv.fx.push({ t: "wave", x: b.x, y: b.y, r: 20, life: 1.6, hit: false }); }
+    }
+    // 接触（大体型）
+    if (d < (46 * esm + cat.r) && bio.iFrames <= 0) { surv.lastHitBy = "鼠王"; survPendingSrc = "鼠王"; bioTakeBite(); if (bioDeath) bioDeath = "boss"; }
+  }
+  function survNoteDmg(src) { surv.dmgSrc[src] = (surv.dmgSrc[src] || 0) + 1; surv.lastHitBy = src; }
+  // ---- 小偷鼠 ----
+  function survSpawnThief() {
+    if (!surv.gems.length) return null;
+    var p = ringPointNear(240);
+    var m = spawnMouseAt(p.x, p.y, "grey", survTimeT(), "wander");
+    m.thief = true; m.survCtl = true; m.stolen = 0; m.thiefT = 14; return m;
+  }
+  function survThiefStep(m, dt) {
+    var esm = entityScaleMult; m.thiefT -= dt; if (m.stun > 0) { m.stun -= dt; return; }
+    var tx, ty, flee = m.thiefT <= 0 || m.stolen >= 12;
+    if (!flee) {
+      var best = null, bd = 1e9;
+      for (var i = 0; i < surv.gems.length; i++) { var g = surv.gems[i], dd = distance(g.x, g.y, m.x, m.y); if (dd < bd) { bd = dd; best = i; } }
+      if (best == null) flee = true;
+      else {
+        var g2 = surv.gems[best]; tx = g2.x; ty = g2.y;
+        if (bd < 16 * esm) { m.stolen += g2.v; surv.stolenTotal += g2.v; surv.gems.splice(best, 1); }
+      }
+    }
+    if (flee) { tx = m.x + (m.x - cat.x); ty = m.y + (m.y - cat.y); }
+    var dx = tx - m.x, dy = ty - m.y, d = Math.sqrt(dx * dx + dy * dy) || 1, sp = 150 * esm;
+    m.vx = dx / d * sp; m.vy = dy / d * sp; m.x += m.vx * dt; m.y += m.vy * dt; m.facing = Math.atan2(dy, dx); m.runCycle += dt * 3;
+    if (TERR) TERR.push(m);
+    if (flee && distance(m.x, m.y, cat.x, cat.y) > 650 * esm) { var idx = mice.indexOf(m); if (idx >= 0) recycleMouse(idx); }
+  }
+  // ---- 武器 ----
+  function survAoe(R, fn) { for (var i = mice.length - 1; i >= 0; i--) { var m = mice[i]; if (!m || !uniOk(m)) continue; var d = distance(m.x, m.y, cat.x, cat.y); if (d < R) fn(m, d); } }
+  function survPush(m, k) { if (m.boss) return; var a = Math.atan2(m.y - cat.y, m.x - cat.x); m.vx = Math.cos(a) * k; m.vy = Math.sin(a) * k; m.x += Math.cos(a) * k * 0.08; m.y += Math.sin(a) * k * 0.08; }
+  function survFireMain() {
+    var lv = survWeapLv("main"), sup = !!surv.awak.main, esm = entityScaleMult, sk = currentSkin, kill = [];
+    var hit = function (m, st, kind) { if (sup) kill.push(m); else stunM(m, st, kind); };
+    if (sk === "black") {
+      var list = survNearestMice(2 + lv, 200 * esm); list.forEach(function (o) { hit(o.m, 1.5, "dizzy"); surv.fx.push({ t: "ring", x: o.m.x, y: o.m.y, r: 14, life: 0.3, c: "rgba(120,80,200," }); });
+    } else if (sk === "white") {
+      var R = (70 + lv * 15) * esm; survAoe(R, function (m) { hit(m, 1 + lv * 0.2, "ice"); }); surv.fx.push({ t: "ring", x: cat.x, y: cat.y, r: R / esm, life: 0.4, c: "rgba(160,220,255," });
+    } else if (sk === "calico") {
+      var Rg = (250 + lv * 50) * esm; surv.gems.forEach(function (g) { if (distance(g.x, g.y, cat.x, cat.y) < Rg) { g.x = cat.x + (g.x - cat.x) * 0.15; g.y = cat.y + (g.y - cat.y) * 0.15; } });
+      survAoe(70 * esm, function (m) { hit(m, 0.8, "dizzy"); }); surv.fx.push({ t: "ring", x: cat.x, y: cat.y, r: 70, life: 0.35, c: "rgba(255,210,90," });
+      if (sup) for (var q = 0; q < 3; q++) survDropGem(cat.x + (Math.random() - 0.5) * 120 * esm, cat.y + (Math.random() - 0.5) * 120 * esm, 2);
+    } else if (sk === "blue") {
+      var Rb = (90 + lv * 10) * esm; survAoe(Rb, function (m) { survPush(m, 360); hit(m, 1, "wave"); }); surv.fx.push({ t: "ring", x: cat.x, y: cat.y, r: Rb / esm, life: 0.4, c: "rgba(140,160,200," }); shakeT = 0.12; shakeAmp = 3;
+    } else if (sk === "siamese") {
+      var L = (240 + lv * 20) * esm, ux = Math.cos(cat.facing), uy = Math.sin(cat.facing);
+      survAoe(L, function (m) { var px = m.x - cat.x, py = m.y - cat.y, along = px * ux + py * uy, perp = Math.abs(px * uy - py * ux); if (along > 0 && perp < 40 * esm) hit(m, 1.2, "dizzy"); });
+      surv.fx.push({ t: "line", x: cat.x, y: cat.y, ux: ux, uy: uy, L: L / esm, life: 0.3 });
+    } else { // orange
+      var Ro = (80 + lv * 12) * esm; survAoe(Ro, function (m) { survPush(m, 300); hit(m, 0.5, "wave"); }); surv.fx.push({ t: "ring", x: cat.x, y: cat.y, r: Ro / esm, life: 0.35, c: "rgba(255,160,70," });
+    }
+    kill.forEach(function (m) { survDamageMouse(m, 3); });
+  }
+  function survFireClaw() {
+    var lv = survWeapLv("claw"); if (lv <= 0) return;
+    var aw = !!surv.awak.claw, R = (90 + lv * 10) * entityScaleMult * (aw ? 1.4 : 1), half = aw ? Math.PI : 0.7, n = (1 + lv) * (aw ? 2 : 1), ux = Math.cos(cat.facing), uy = Math.sin(cat.facing);
+    var c = survNearestMice(30, R).filter(function (o) { var a = Math.atan2(o.m.y - cat.y, o.m.x - cat.x) - cat.facing; a = Math.atan2(Math.sin(a), Math.cos(a)); return Math.abs(a) < half; }).slice(0, n);
+    c.forEach(function (o) { survDamageMouse(o.m, 1); });
+    surv.fx.push({ t: "arc", x: cat.x, y: cat.y, r: R / entityScaleMult, a: cat.facing, h: half, life: 0.2 });
+  }
+  function survUpdateBells(dt) {
+    var lv = survWeapLv("bell"); if (lv <= 0) return;
+    var aw = !!surv.awak.bell, n = lv + (aw ? 2 : 0), R = 70 * entityScaleMult; surv.bellA += dt * 2.6;
+    for (var i = 0; i < n; i++) {
+      var a = surv.bellA + i / n * 6.283, bx = cat.x + Math.cos(a) * R, by = cat.y + Math.sin(a) * R;
+      for (var k = mice.length - 1; k >= 0; k--) { var m = mice[k]; if (!uniOk(m) || (m.bellCd > elapsedPlayTime)) continue;
+        if (distance(m.x, m.y, bx, by) < 20 * entityScaleMult) { m.bellCd = elapsedPlayTime + 0.6; if (aw) survDamageMouse(m, 1); else { survPush(m, 260); stunM(m, 0.6, "wave"); } } }
+    }
+  }
+  function survUpdateMilk(dt) {
+    var lv = survWeapLv("milk"); if (lv <= 0) return;
+    var aw = !!surv.awak.milk; surv.milkT -= dt;
+    if (surv.milkT <= 0) { surv.milkT = 6 * surv.tempo; surv.milk.push({ x: cat.x, y: cat.y, r: (60 + lv * 10) * (aw ? 1.6 : 1), life: 4, tick: 0 }); if (surv.milk.length > 4) surv.milk.shift(); }
+    for (var i = surv.milk.length - 1; i >= 0; i--) {
+      var p = surv.milk[i]; p.life -= dt; p.tick -= dt; if (p.life <= 0) { surv.milk.splice(i, 1); continue; }
+      if (p.tick <= 0) { p.tick = 0.5; var R = p.r * entityScaleMult;
+        for (var k = mice.length - 1; k >= 0; k--) { var m = mice[k]; if (!uniOk(m)) continue; if (distance(m.x, m.y, p.x, p.y) < R) { if (aw && !m.mutant && Math.random() < 0.25) survDamageMouse(m, 1); else stunM(m, 0.45, "ice"); } } }
+    }
+  }
+  // ---- 主循环钩子 ----
+  function survM2Update(dt) {
+    if (!surv.awak) survM2Reset();
+    var t = elapsedPlayTime;
+    surv.mainT -= dt; if (surv.mainT <= 0) { surv.mainT = Math.max(1.6, (survMainDef().cd - survWeapLv("main") * 0.4)) * surv.tempo; survFireMain(); }
+    surv.clawT -= dt; if (survWeapLv("claw") > 0 && surv.clawT <= 0) { surv.clawT = 2.2 * surv.tempo; survFireClaw(); }
+    survUpdateBells(dt); survUpdateMilk(dt);
+    // 精英时间轴（仅 3 循环版本）
+    if (SURV_CYCLES >= 3) for (var i = 0; i < SURV_ELITE_AT.length; i++) if (t >= SURV_ELITE_AT[i] && !surv.eliteDone[i]) { surv.eliteDone[i] = true; survSpawnElite(); }
+    if (SURV_CYCLES >= 3 && !surv.bossSpawned && t >= SURV_BOSS_AT) survSpawnBoss();
+    survBossUpdate(dt);
+    // 精英光环
+    for (i = 0; i < mice.length; i++) {
+      var e = mice[i]; if (!e.elite) continue;
+      if (e.elite === "regen") e.hp = Math.min(e.maxHp, e.hp + dt * 0.8);
+      var A = 110 * entityScaleMult;
+      gridEach(e.x, e.y, A, function (o) { if (o === e) return; if (e.elite === "haste") o.hasteT = 0.3; else if (e.elite === "shield") o.shieldT = 0.3; else if (o.mutant && o.hp < 2) o.hp += dt * 0.3; });
+    }
+    // 小偷鼠
+    surv.thiefT -= dt; if (surv.thiefT <= 0) { surv.thiefT = 25 + Math.random() * 10; survSpawnThief(); }
+    for (i = mice.length - 1; i >= 0; i--) { var m = mice[i]; if (m && m.thief) survThiefStep(m, dt); if (m) { if (m.hasteT > 0) m.hasteT -= dt; if (m.shieldT > 0) m.shieldT -= dt; } }
+    // 宝箱拾取
+    for (i = surv.chestsOnMap.length - 1; i >= 0; i--) {
+      var c = surv.chestsOnMap[i]; c.age = (c.age || 0) + dt;
+      if (distance(c.x, c.y, cat.x, cat.y) < 30 * entityScaleMult + cat.r) { surv.chestsOnMap.splice(i, 1); survOpenChest(); break; }
+    }
+    // fx
+    for (i = surv.fx.length - 1; i >= 0; i--) {
+      var f = surv.fx[i]; f.life -= dt;
+      if (f.t === "wave") { f.r += 240 * dt; var dd = distance(cat.x, cat.y, f.x, f.y) / entityScaleMult; if (!f.hit && Math.abs(dd - f.r) < 18 && bio.iFrames <= 0) { f.hit = true; survPendingSrc = "鼠王冲击波"; bioTakeBite(); if (bioDeath) bioDeath = "boss"; } }
+      if (f.life <= 0) surv.fx.splice(i, 1);
+    }
+    // 鼠王幸存胜利
+    if (surv.bossSpawned && !surv.won && t >= surv.bossAt + SURV_BOSS_SURVIVE) survWin(false);
+  }
+  function survWin(killed) {
+    if (surv.won) return;
+    surv.won = true; surv.bossKilled = !!killed; bioDeath = null;
+    for (var i = 0; i < mice.length; i++) if (!mice[i].boss) startFlee(mice[i], 1);
+    score += killed ? 5000 : 2000;
+    bioShowBanner(killed ? "👑 鼠王被击败！黎明到了！" : "🌅 撑过鼠王，黎明到了！", 2.5);
+    setTimeout(function () { if (state === STATE_PLAY) enterResult(); }, 1200);
+  }
+  function survOpenChest() {
+    if (surv.picking) { surv.chestQ = (surv.chestQ || 0) + 1; return; }
+    var cards = survChestCards(); if (!cards.length) return;
+    survOpenPick(cards, "🎁 宝箱！选一项");
+  }
+  function survM2OnKill(m) {
+    if (m.elite) { surv.chestsOnMap.push({ x: m.x, y: m.y }); bioShowBanner("🎁 精英掉落宝箱", 1.6); }
+    if (m.thief && m.stolen > 0) survDropGem(m.x, m.y, m.stolen);
+    if (m.boss) { surv.boss = null; survWin(true); }
+  }
+  function survM2Draw() {
+    var esm = entityScaleMult, i;
+    for (i = 0; i < surv.milk.length; i++) { var p = surv.milk[i]; ctx.globalAlpha = Math.min(0.45, p.life * 0.3); ctx.fillStyle = "#fffaf0"; ctx.beginPath(); ctx.arc(worldToScreenX(p.x), worldToScreenY(p.y), s(p.r * esm), 0, 6.283); ctx.fill(); }
+    ctx.globalAlpha = 1;
+    var bl = survWeapLv("bell"); if (bl > 0) { var n = bl + (surv.awak.bell ? 2 : 0); for (i = 0; i < n; i++) { var a = surv.bellA + i / n * 6.283; emojiQuick("🔔", worldToScreenX(cat.x + Math.cos(a) * 70 * esm), worldToScreenY(cat.y + Math.sin(a) * 70 * esm), s(14)); } }
+    for (i = 0; i < surv.chestsOnMap.length; i++) { var c = surv.chestsOnMap[i]; emojiQuick("🎁", worldToScreenX(c.x), worldToScreenY(c.y) - s(4 + Math.sin(elapsedPlayTime * 4) * 3), s(20)); }
+    for (i = 0; i < mice.length; i++) {
+      var m = mice[i], sx = worldToScreenX(m.x), sy = worldToScreenY(m.y);
+      if (sx < -80 || sx > W + 80 || sy < -80 || sy > H + 80) continue;
+      if (m.elite) { var af = SURV_AFFIX[m.elite]; ctx.strokeStyle = af.col + ".7)"; ctx.lineWidth = s(3); ctx.beginPath(); ctx.arc(sx, sy, s(22 * esm), 0, 6.283); ctx.stroke(); ctx.globalAlpha = 0.12; ctx.fillStyle = af.col + "1)"; ctx.beginPath(); ctx.arc(sx, sy, s(110 * esm), 0, 6.283); ctx.fill(); ctx.globalAlpha = 1; emojiQuick(af.ic, sx, sy - s(30), s(14)); survBar(sx - s(18), sy - s(22), s(36), m.hp / m.maxHp, "#ff6a4a"); }
+      if (m.thief && m.stolen > 0) { emojiQuick("🐟", sx, sy - s(24), s(12)); ctx.fillStyle = "#fff"; ctx.font = "800 " + Math.round(s(10)) + "px sans-serif"; ctx.textAlign = "left"; ctx.fillText("×" + m.stolen, sx + s(7), sy - s(20)); }
+      else if (m.thief) emojiQuick("🦹", sx, sy - s(22), s(11));
+      if (m.boss) { emojiQuick("👑", sx, sy - s(62 * esm), s(30)); if (m.wind > 0) { ctx.strokeStyle = "rgba(255,60,60,.8)"; ctx.lineWidth = s(4); ctx.beginPath(); ctx.arc(sx, sy, s(50 * esm), 0, 6.283); ctx.stroke(); } }
+    }
+    for (i = 0; i < surv.fx.length; i++) {
+      var f = surv.fx[i], fx = worldToScreenX(f.x), fy = worldToScreenY(f.y);
+      if (f.t === "ring") { ctx.strokeStyle = f.c + Math.max(0, f.life * 2).toFixed(2) + ")"; ctx.lineWidth = s(3); ctx.beginPath(); ctx.arc(fx, fy, s(f.r * esm), 0, 6.283); ctx.stroke(); }
+      else if (f.t === "wave") { ctx.strokeStyle = "rgba(255,70,70," + Math.min(0.9, f.life).toFixed(2) + ")"; ctx.lineWidth = s(6); ctx.beginPath(); ctx.arc(fx, fy, s(f.r * esm), 0, 6.283); ctx.stroke(); }
+      else if (f.t === "line") { ctx.strokeStyle = "rgba(200,180,255," + (f.life * 2.5).toFixed(2) + ")"; ctx.lineWidth = s(30); ctx.beginPath(); ctx.moveTo(fx, fy); ctx.lineTo(fx + f.ux * s(f.L * esm), fy + f.uy * s(f.L * esm)); ctx.stroke(); }
+      else if (f.t === "arc") { ctx.fillStyle = "rgba(255,255,255," + (f.life * 2).toFixed(2) + ")"; ctx.beginPath(); ctx.moveTo(fx, fy); ctx.arc(fx, fy, s(f.r * esm), f.a - f.h, f.a + f.h); ctx.closePath(); ctx.fill(); }
+    }
+    // Boss 血条 + 生存进度
+    if (surv.boss) {
+      var b = surv.boss, bw = Math.min(W - 60, 300), bx = (W - bw) / 2;
+      ctx.fillStyle = "rgba(0,0,0,.5)"; ctx.fillRect(bx - 2, 104, bw + 4, 14);
+      survBar(bx, 106, bw, b.hp / b.maxHp, b.phase === 3 ? "#ff2a2a" : "#c84aff", 10);
+      var sv = clamp01((elapsedPlayTime - surv.bossAt) / SURV_BOSS_SURVIVE); survBar(bx, 120, bw, sv, "#ffd23f", 5);
+      ctx.fillStyle = "#fff"; ctx.font = "800 12px sans-serif"; ctx.textAlign = "center"; ctx.fillText("👑 鼠王 P" + b.phase + " · 击杀 +5000 / 坚持 " + Math.ceil(SURV_BOSS_SURVIVE - (elapsedPlayTime - surv.bossAt)) + "s +2000", W / 2, 100);
+    }
+  }
+  function survBar(x, y, w, f, col, h) { h = h || 4; ctx.fillStyle = "rgba(0,0,0,.45)"; ctx.fillRect(x, y, w, h); ctx.fillStyle = col; ctx.fillRect(x, y, w * clamp01(f), h); }
+  var survPendingSrc = null;
   function survUpdate(dt) {
     if (!survActive() || state !== STATE_PLAY) return;
     if (surv.picking) return;
@@ -4868,7 +5157,7 @@
     var biting = false;
     for (i = 0; i < mice.length; i++) {
       m = mice[i]; if (!uniOk(m) || m.type === "gold") continue;
-      if (distance(m.x, m.y, cat.x, cat.y) < SURV_CONTACT_R * entityScaleMult + cat.r) { biting = true; break; }
+      if (m.boss || m.thief) continue; if (distance(m.x, m.y, cat.x, cat.y) < SURV_CONTACT_R * entityScaleMult + cat.r) { biting = true; survPendingSrc = m.elite ? "精英鼠" : (m.type === "brown" ? "棕鼠" : "灰鼠"); break; }
     }
     if (biting && bio.iFrames <= 0) {
       surv.contactT += dt;
@@ -4876,10 +5165,12 @@
     } else if (surv.contactT > 0) surv.contactT = Math.max(0, surv.contactT - dt * 2);
     else if (surv.contactT < 0) surv.contactT = Math.min(0, surv.contactT + dt); // CD 倒数
 
+    survM2Update(dt);
     survDirector(dt);
   }
   function survDraw() {
     if (!survActive()) return;
+    if (surv.awak) survM2Draw();
     // gems
     for (var i = 0; i < surv.gems.length; i++) {
       var g = surv.gems[i], sx = worldToScreenX(g.x), sy = worldToScreenY(g.y);
@@ -5051,7 +5342,8 @@
     var sk = skillOf(id);
     var html = '<b>' + sk.icon + ' ' + sk.name + '</b><span class="evo-row">';
     for (var li = 0; li < sk.lv.length; li++) html += '<span class="evo-step" title="' + sk.lv[li][1] + '：' + sk.lv[li][2] + '"><em>' + sk.lv[li][0] + '</em>Lv' + (li + 1) + '</span>';
-    skinAbilityEl.innerHTML = html + '</span><span class="evo-desc">Lv1 ' + sk.lv[0][1] + '：' + sk.lv[0][2] + ' · 抓 15/40/80/150 只依次进化</span>';
+    if (SURV_ON) { var md = SURV_MAIN[id] || SURV_MAIN.orange; skinAbilityEl.innerHTML = '<b>' + md.icon + ' 招牌·' + md.name + '</b><span class="evo-desc">' + md.desc(1) + ' · 升级卡强化，Lv5 开宝箱觉醒专属超武「' + md.sup + '」</span>'; }
+    else skinAbilityEl.innerHTML = html + '</span><span class="evo-desc">Lv1 ' + sk.lv[0][1] + '：' + sk.lv[0][2] + ' · 抓 15/40/80/150 只依次进化</span>';
     for (var i = 0; i < skinCards.length; i++) {
       var on = skinCards[i].dataset.skin === id;
       skinCards[i].classList.toggle("selected", on);
@@ -5241,6 +5533,16 @@
       surv.weapons = {}; surv.autoOff = true; surv.autoCd = 9999; surv.chainT = 9999; surv.fearT = 9999; surv.yarn = [];
     },
     survSetCycles: function (n) { SURV_CYCLES = Math.max(1, n|0); },
+    survSpawnElite: function (af) { var m = survSpawnElite(af, { x: cat.x + 120, y: cat.y }); return { hp: m.hp, elite: m.elite }; },
+    survSpawnBoss: function () { survSpawnBoss(); return !!surv.boss; },
+    survBossHit: function (n) { var b = surv && surv.boss; if (!b) return null; b.hp -= (n || 10); if (b.hp <= 0) { b.hp = 1; b.hitInv = 0; survDamageMouse(b, 5); } return surv.boss ? surv.boss.hp : 0; },
+    get survBoss() { var b = surv && surv.boss; return b ? { hp: b.hp, maxHp: b.maxHp, phase: b.phase, x: b.x, y: b.y } : null; },
+    survGive: function (id, lv) { if (!surv) return; var AD = survAllDefs(); if (AD.W[id]) surv.weapons[id] = lv || 1; else if (id.indexOf("awk_") === 0) surv.awak[id.slice(4)] = 1; else surv.passives[id] = lv || 1; survRefreshStats(); },
+    survOpenChest: function () { survOpenChest(); return surv.picking; },
+    survChestCards: function () { return survChestCards().map(function (c) { return c.def.name; }); },
+    survSpawnThief: function () { for (var i = 0; i < 6; i++) survDropGem(cat.x + 150 + i * 10, cat.y + 40, 2); var m = survSpawnThief(); if (m) { m.x = cat.x + 100; m.y = cat.y + 40; } return !!m; },
+    get survThieves() { return mice.filter(function (m) { return m.thief; }).map(function (m) { return { stolen: m.stolen, x: m.x, y: m.y }; }); },
+    get survExt() { return surv ? { awak: Object.assign({}, surv.awak), chests: surv.chestsOnMap.length, dmgSrc: Object.assign({}, surv.dmgSrc), bossKilled: surv.bossKilled, dur: survRunDur(), cap: mouseCap(), weak: survIsWeak(), elites: mice.filter(function (m) { return m.elite; }).length } : null; },
     get surv() { return surv ? { level: surv.level, xp: surv.xp, kills: surv.kills, gems: surv.gems.length, dashCd: surv.dashCd, weapons: Object.assign({}, surv.weapons), passives: Object.assign({}, surv.passives), won: surv.won, cycles: SURV_CYCLES, spawnMult: surv.spawnMult } : null; },
 
     forceBiteCheck: function () { return { biteR: BIO_BITE_R, infectR: BIO_INFECT_R, esm: entityScaleMult }; },
