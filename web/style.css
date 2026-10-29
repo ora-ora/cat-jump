@@ -615,3 +615,16 @@ canvas#game { touch-action: none; }
 .surv-report .sr-arrow { display: inline-block; min-width: 26px; text-align: center; font-size: 22px; line-height: 1; color: #fff; background: #d9412b; border-radius: 50%; padding: 2px 0; margin-right: 4px; }
 .surv-report .sr-top { opacity: .9; }
 .surv-report .sr-tip { margin-top: 2px; font-weight: 700; }
+/* OPT1 */
+.surv-pick-tools { display: flex; gap: 8px; margin-top: 10px; }
+.surv-pick-tools button { flex: 1; font-size: 13px; }
+.surv-pick-tools button.on { background: #ffb0a0; border-color: #e07060; }
+.surv-pick-hint { font-size: 12px; color: #8a5a3a; margin: 6px 0 0; text-align: center; }
+.surv-card .ah { margin-top: 4px; font-size: 11px; color: #b06020; font-weight: 700; }
+.surv-card.awk { border-color: #ffd24a; background: #fff6d8; }
+.surv-settle .bdg-got { color: #c47a10; font-weight: 800; }
+.skin-badges { display: flex; gap: 2px; justify-content: center; font-size: 11px; line-height: 1; margin-top: 2px; min-height: 14px; }
+.skin-badges .bdg { opacity: .25; }
+.skin-badges .bdg.on { opacity: 1; }
+.daily-tip { font-size: 12px; color: #8a5a3a; margin: 4px 0 0; text-align: center; min-height: 1em; }
+#dailyBtn { margin-top: 6px; }

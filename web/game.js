@@ -224,6 +224,10 @@
     circle.x += (dx / dist) * overlap;
     circle.y += (dy / dist) * overlap;
   }
+  function circleOverlapsAabb(x, y, r, box) {
+    var nx = clamp(x, box.x, box.x + box.w), ny = clamp(y, box.y, box.y + box.h);
+    var dx = x - nx, dy = y - ny; return dx * dx + dy * dy < r * r;
+  }
 
   // =======================================================================
   // World / Chunk system（区块化确定性生成，世界坐标用逻辑单位，不随 DPR/屏幕尺寸变化）
@@ -895,6 +899,7 @@
       // 守卫战：近距主动贴猫（金鼠除外）
       if (SURV_ON && m.type !== "gold" && !(m.stun > 0) && !(m.pullT > 0) && dToCat < (m.elite || m.mutant ? 700 : 300) * esm && dToCat > 8) {
         var ch = normalize(cat.x - m.x, cat.y - m.y), spd = (m.type === "brown" ? 1.2 : 1.0) * 82 * esm * (m.hasteT > 0 || m.elite === "haste" ? 1.3 : 1) * (1 + 0.15 * survTimeT()); // M4 调平衡：普通鼠明显慢于猫（150）
+        if (m.elite && m.elite !== "haste") spd *= 0.72; // OPT1：非加速精英略慢，方便风筝磨血
         if (m.biting) spd *= 1.25;
         m.vx = ch.x * spd; m.vy = ch.y * spd; m.state = "wander";
         m.x += m.vx * dt; m.y += m.vy * dt; if (TERR) TERR.push(m);
@@ -2555,6 +2560,56 @@
     var b = bestGet(), any = false; for (var k in bestPending) { b[k] = (b[k] | 0) + bestPending[k]; any = true; }
     bestPending = {}; if (any) storageSet("catmouse_bestiary", JSON.stringify(b));
   }
+  // ---- 每猫成就徽章：黎明 / 屠王 / 双觉醒 ----
+  var BADGE_DEFS = [
+    { id: "dawn", e: "🌅", name: "黎明" },
+    { id: "king", e: "👑", name: "屠王" },
+    { id: "awk2", e: "✨", name: "双觉醒" }
+  ];
+  function badgesGet() { try { var o = JSON.parse(storageGet("catmouse_badges", "{}")); return o && typeof o === "object" ? o : {}; } catch (e) { return {}; } }
+  function badgeOf(skin) { return badgesGet()[skin] || {}; }
+  function badgeUnlock(skin, id) {
+    var all = badgesGet(); if (!all[skin]) all[skin] = {};
+    if (all[skin][id]) return false;
+    all[skin][id] = 1; storageSet("catmouse_badges", JSON.stringify(all)); return true;
+  }
+  function badgeRowHtml(skin) {
+    var b = badgeOf(skin);
+    return BADGE_DEFS.map(function (d) { return "<span class=\"bdg" + (b[d.id] ? " on" : "") + "\" title=\"" + d.name + "\">" + (b[d.id] ? d.e : "·") + "</span>"; }).join("");
+  }
+  function survGrantBadges(won) {
+    if (!surv) return [];
+    var got = [];
+    if (won && surv.bossKilled && badgeUnlock(currentSkin, "king")) got.push("👑 屠王");
+    else if (won && badgeUnlock(currentSkin, "dawn")) got.push("🌅 黎明");
+    var awkN = 0; if (surv.awak) for (var k in surv.awak) if (surv.awak[k]) awkN++;
+    if (awkN >= 2 && badgeUnlock(currentSkin, "awk2")) got.push("✨ 双觉醒");
+    return got;
+  }
+  // ---- 今日挑战：固定日期种子 + 固定猫，只记本地成绩 ----
+  var survDaily = null;
+  function dailyKey() {
+    var d = new Date(), y = d.getFullYear(), m = d.getMonth() + 1, day = d.getDate();
+    return y + "-" + (m < 10 ? "0" : "") + m + "-" + (day < 10 ? "0" : "") + day;
+  }
+  function dailySeed(key) {
+    var h = 2166136261;
+    for (var i = 0; i < key.length; i++) { h ^= key.charCodeAt(i); h = Math.imul(h, 16777619); }
+    return (h >>> 0) || 1;
+  }
+  function dailySkin(key) { return SKIN_IDS[dailySeed(key) % SKIN_IDS.length]; }
+  function dailyBestGet(key) { return lsNum("catmouse_daily_" + key); }
+  function dailyBestSet(key, sc) { var prev = dailyBestGet(key); if (sc > prev) storageSet("catmouse_daily_" + key, String(sc)); }
+  function openDailyChallenge() {
+    var key = dailyKey(), skin = dailySkin(key);
+    survDaily = { key: key, skin: skin, seed: dailySeed(key + "-surv") };
+    selectSkin(skin);
+    var best = dailyBestGet(key);
+    bioShowBanner("📅 今日挑战 · " + (window.CatArt.skinOf(skin).name) + (best ? (" · 最佳 " + best) : ""), 2.4);
+    // 点开始即可；种子在 startPlay 时写入
+    var tip = document.getElementById("dailyTip");
+    if (tip) tip.textContent = "今日挑战已就绪：「" + window.CatArt.skinOf(skin).name + "」· 本地成绩" + (best ? " 最佳 " + best : "") + " · 不进排行榜";
+  }
   function openShop() {
     var ov = document.getElementById("shopScreen");
     if (!ov) {
@@ -2606,6 +2661,11 @@
     var lb = document.getElementById("showLeaderboardBtnStart"); if (!lb) return;
     var b = document.createElement("button"); b.id = "shopBtn"; b.type = "button"; b.className = "btn-secondary shop-btn"; lb.parentNode.insertBefore(b, lb.nextSibling);
     b.onclick = function () { sfx.click(); openShop(); }; setTimeout(updateShopBtn, 0);
+    var d = document.createElement("button"); d.id = "dailyBtn"; d.type = "button"; d.className = "btn-secondary"; d.textContent = "📅 今日挑战";
+    lb.parentNode.insertBefore(d, b.nextSibling);
+    d.onclick = function () { sfx.click(); openDailyChallenge(); };
+    var tip = document.createElement("p"); tip.id = "dailyTip"; tip.className = "daily-tip"; tip.textContent = "";
+    lb.parentNode.insertBefore(tip, d.nextSibling);
   })();
   function drawCatAt(x, y, r, a, runCycle, skin, ghost) {
     var u = r * CAT_UNIT_PER_R;
@@ -2712,7 +2772,16 @@
       var ox = 0;
       if (m.cornerT > 0 || m.trem > 0 || (m.beh === "timid" && m.state === "flee" && v.full)) ox = Math.sin(elapsedPlayTime * 60) * 2 * u;
       if (m.asleep) st = ["sit", 2];
-      if (dayNow.night > 0.5 && !m.boss && !m.elite && mouseInDark(m)) { var ea = 0.5 + 0.5 * dayNow.night; var blk = Math.sin(elapsedPlayTime * 2.3 + m.seed * 11) > 0.96; if (!blk) { var gw = glowSprite(), gs = s(9); if (resScale >= 1) { ctx.globalAlpha = ea; ctx.drawImage(gw, sx - 5 * u - gs / 2, sy - 8 * u - gs / 2, gs, gs); ctx.drawImage(gw, sx + 5 * u - gs / 2, sy - 8 * u - gs / 2, gs, gs); ctx.globalAlpha = 1; } ctx.fillStyle = "#fff8c0"; ctx.beginPath(); ctx.arc(sx - 5 * u, sy - 8 * u, s(1.6), 0, 7); ctx.arc(sx + 5 * u, sy - 8 * u, s(1.6), 0, 7); ctx.fill(); } continue; }
+      if (dayNow.night > 0.5 && !m.boss && !m.elite && mouseInDark(m)) {
+        if (mice.length > 90 && (m.seed & 1)) { continue; } // 拥挤夜：隔只画眼睛，保帧率
+        var ea = 0.5 + 0.5 * dayNow.night; var blk = Math.sin(elapsedPlayTime * 2.3 + m.seed * 11) > 0.96;
+        if (!blk) {
+          var gw = glowSprite(), gs = s(9);
+          if (resScale >= 1 && mice.length < 80) { ctx.globalAlpha = ea; ctx.drawImage(gw, sx - 5 * u - gs / 2, sy - 8 * u - gs / 2, gs, gs); ctx.drawImage(gw, sx + 5 * u - gs / 2, sy - 8 * u - gs / 2, gs, gs); ctx.globalAlpha = 1; }
+          ctx.fillStyle = "#fff8c0"; ctx.beginPath(); ctx.arc(sx - 5 * u, sy - 8 * u, s(1.6), 0, 7); ctx.arc(sx + 5 * u, sy - 8 * u, s(1.6), 0, 7); ctx.fill();
+        }
+        continue;
+      }
       if (!dbgDraw.noSprite && !paintedMouse(m.type, sx + ox, sy, u, d[0], d[1], st, m.runCycle)) blit(ANIM.mouseSprite(m.type, d[0], st[0], st[1], spritePx(u)), sx + ox, sy, u, d[1]);
       drawMutantTint(m, sx + ox, sy, u);
       if (!dbgDraw.noTell && (v.full || m.type === "gold" || m.packId)) drawTell(m, sx + ox, sy, u, st, v.full, v.i);
@@ -3366,6 +3435,7 @@
 
   function enterStart() {
     state = STATE_START;
+    survDaily = null; // 回首页清掉今日挑战标记；点「今日挑战」再激活
     hideScreen(dom.hud); var mm2 = document.getElementById("miniMap"); if (mm2) mm2.classList.add("hidden");
     hideScreen(dom.pauseScreen);
     hideScreen(dom.resultScreen);
@@ -3373,28 +3443,32 @@
     dom.bestScoreStart.textContent = String(best);
     dom.nicknameInput.value = ensureSavedNickname();
     dom.nicknameHint.classList.add("hidden");
+    var tip = document.getElementById("dailyTip"); if (tip) tip.textContent = "";
     showScreen(dom.startScreen);
+    try { paintSkinBadges(); } catch (e) {}
   }
 
   function beginRun() {
     ensureAudio();
     var nickname = enforceNicknameNotOffensive(dom.nicknameInput, dom.nicknameHint).trim();
     storageSet("catmouse_nickname", nickname);
+    if (survDaily) selectSkin(survDaily.skin);
     hideScreen(dom.startScreen);
     showScreen(dom.hud);
     resetWorld();
+    if (survDaily) worldSeed = survDaily.seed;
     resetScoring();
     bioReset();
     survReset(); survRefreshStats();
     resetAbilities();
     dom.abilityBadge.dataset.key = ""; updateSkillBadge(true);
     dom.comboText.classList.add("hidden");
-    setText(dom.rankText, SURV_ON ? "守卫战" : "排名：未上榜");
+    setText(dom.rankText, survDaily ? ("📅 今日挑战 · " + (window.CatArt.skinOf(currentSkin).name)) : (SURV_ON ? "守卫战" : "排名：未上榜"));
     state = STATE_PLAY;
     if (SURV_ON) {
-      run.id = null; run.offline = true; // 守卫战不走经典心跳
-      try { survStartRun(nickname); } catch (e) {}
-      bioShowBanner("拖动走位 · 点按冲刺 · 活到黎明", 2.6);
+      run.id = null; run.offline = true;
+      if (!survDaily) { try { survStartRun(nickname); } catch (e) {} }
+      bioShowBanner(survDaily ? "📅 今日挑战：撑过黎明！" : "拖动走位 · 点按冲刺 · 活到黎明", 2.6);
     } else startRun(nickname);
   }
 
@@ -3431,6 +3505,38 @@
     hideScreen(dom.pauseScreen);
   }
 
+  function survSettleCard(won, fish) {
+    var box = document.getElementById("resultMissions");
+    if (!box) { box = document.createElement("div"); box.id = "resultMissions"; box.className = "result-missions surv-settle"; var st = document.querySelector("#resultScreen .result-stats"); st.parentNode.insertBefore(box, st.nextSibling); }
+    box.className = "result-missions surv-settle"; box.innerHTML = "";
+    var lvPart = surv.level * 5, killPart = Math.floor(surv.kills / 10), dawnPart = won ? 50 : 0;
+    var lines = [];
+    lines.push("<div class=\"rm-head\">🐟 本局小鱼干 +" + fish + "（共 " + lsNum("catmouse_fish") + "）</div>");
+    lines.push("<div class=\"rm-row\">明细：等级 " + surv.level + "×5 = " + lvPart + " · 击杀 " + surv.kills + "÷10 = " + killPart + (won ? (" · 黎明 +" + dawnPart) : "") + "</div>");
+    var isBest = score >= best;
+    lines.push("<div class=\"rm-row\">" + (isBest ? "🏆 新纪录！" : ("历史最高 " + best)) + " · 守卫榜见下方</div>");
+    // 下一个解锁提示
+    var nextHat = null, own = hatsOwned();
+    for (var i = 0; i < HATS.length; i++) if (own.indexOf(HATS[i].id) < 0) { nextHat = HATS[i]; break; }
+    var tal = talentsGet(), nextTal = null;
+    for (i = 0; i < TALENTS.length; i++) { var lv = talLv(TALENTS[i].id); if (lv < TALENT_MAX) { nextTal = { d: TALENTS[i], cost: talentCost(lv) }; break; } }
+    var tip = [];
+    if (nextTal) tip.push("天赋「" + nextTal.d.name + "」还差 🐟" + Math.max(0, nextTal.cost - lsNum("catmouse_fish")));
+    if (nextHat) tip.push("帽子「" + nextHat.name + "」还差 🐟" + Math.max(0, nextHat.cost - lsNum("catmouse_fish")));
+    var bg = bestGet(), locked = BEST_ENTRIES.filter(function (e) { return !(bg[e.id] > 0); });
+    if (locked.length) tip.push("图鉴未解锁：" + locked[0].name);
+    if (tip.length) lines.push("<div class=\"rm-reward\">🎯 " + tip[0] + "</div>");
+    else lines.push("<div class=\"rm-reward\">✨ 帽子、天赋、图鉴都齐全啦</div>");
+    var unlocked = survGrantBadges(won);
+    if (unlocked.length) lines.push("<div class=\"rm-row bdg-got\">🏅 新徽章：" + unlocked.join(" · ") + "</div>");
+    if (survDaily) {
+      dailyBestSet(survDaily.key, Math.round(score));
+      lines.push("<div class=\"rm-row\">📅 今日挑战本地最佳：" + dailyBestGet(survDaily.key) + "</div>");
+    }
+    box.innerHTML = lines.join("");
+    updateShopBtn();
+    try { paintSkinBadges(); } catch (e) {}
+  }
   function enterResult() {
     state = STATE_RESULT;
     if (typeof survHidePick === "function") survHidePick();
@@ -3457,18 +3563,23 @@
       bestFlush(); survDeathReport(won);
       var head = (won ? "通关" : "失败") + " · Lv" + surv.level + " · 击杀 " + surv.kills + " · 🐟+" + fish;
       dom.resultRankStatus.textContent = head + " · 守卫榜上传中…";
-      var info = { time: Math.floor(elapsedPlayTime), kills: surv.kills, level: surv.level, boss: won ? (surv.bossKilled ? "killed" : "survived") : "none" };
-      survFinishRun(info, function (res) {
-        if (state !== STATE_RESULT) return;
-        if (res.ok && res.final_score != null) { dom.resultRankStatus.textContent = head + " · 守卫榜第 " + res.rank + " 名（" + res.final_score + " 分）"; dom.resultScore.textContent = String(res.final_score); }
-        else if (res.networkError) dom.resultRankStatus.textContent = head + " · 未能连接守卫榜，成绩未上传";
-        else dom.resultRankStatus.textContent = head + " · 成绩未入榜（" + (res.reason || "rejected") + "）";
-      });
+      if (survDaily) {
+        dom.resultRankStatus.textContent = head + " · 今日挑战（本地，不进榜）";
+      } else {
+        var info = { time: Math.floor(elapsedPlayTime), kills: surv.kills, level: surv.level, boss: won ? (surv.bossKilled ? "killed" : "survived") : "none" };
+        survFinishRun(info, function (res) {
+          if (state !== STATE_RESULT) return;
+          if (res.ok && res.final_score != null) { dom.resultRankStatus.textContent = head + " · 守卫榜第 " + res.rank + " 名（" + res.final_score + " 分）"; dom.resultScore.textContent = String(res.final_score); }
+          else if (res.networkError) dom.resultRankStatus.textContent = head + " · 未能连接守卫榜，成绩未上传";
+          else dom.resultRankStatus.textContent = head + " · 成绩未入榜（" + (res.reason || "rejected") + "）";
+        });
+      }
     } else { dom.resultRankStatus.textContent = "结算中…"; var srp = document.getElementById("survReport"); if (srp) srp.classList.add("hidden"); }
     var rg = document.getElementById("resultGap"); if (rg) rg.classList.add("hidden");
     dom.nicknameInputResult.value = storageGet("catmouse_nickname", "");
     dom.nicknameHintResult.classList.add("hidden");
-    missionsResult();
+    if (SURV_ON && surv) survSettleCard(won, fish);
+    else missionsResult();
     showScreen(dom.resultScreen);
     sfx.endRun();
     if (!SURV_ON) finishRun();
@@ -4475,7 +4586,7 @@
   var bio = { seen: false, hearts: 3, maxHearts: 3, stun: 0, iFrames: 0, banner: null, bannerT: 0, nightCount: 0, wasNight: false, blood: false };
   function maxHeartsFor(C) { return C >= 80 ? 6 : C >= 40 ? 5 : C >= 15 ? 4 : 3; }
   function bioReset() {
-    bio.seen = SURV_ON ? true : false; bio.hearts = 3; bio.maxHearts = 3; bio.stun = 0; bio.iFrames = 0;
+    bio.seen = SURV_ON ? true : false; bio.hearts = SURV_ON ? 4 : 3; bio.maxHearts = SURV_ON ? 4 : 3; bio.stun = 0; bio.iFrames = 0;
     bio.banner = null; bio.bannerT = 0; bio.nightCount = 0; bio.wasNight = false; bio.blood = false; bioFishBonus = 0; bioDeath = null;
   }
   function bioCheckHeartGrowth() {
@@ -4578,14 +4689,15 @@
         } else m.infectAcc = Math.max(0, (m.infectAcc || 0) - dt * 0.5);
       }
       // 咬：进 90 世界单位蓄力 0.4s（固定值，不乘 entityScaleMult）
-      if (bio.seen && bio.stun <= 0 && !(m.biteCd > 0) && !(sig && sig.hide) && !(bio.iFrames > 0)) {
+      // 守卫战走 survUpdate 接触伤害，这里跳过，避免精英/变异双扣心
+      if (!SURV_ON && bio.seen && bio.stun <= 0 && !(m.biteCd > 0) && !(sig && sig.hide) && !(bio.iFrames > 0)) {
         var dc = distance(m.x, m.y, cat.x, cat.y);
         if (dc < BIO_BITE_R) {
           if (!m.biting) { m.biting = true; m.biteT = BIO_BITE_WIND; }
           m.biteT -= dt;
           if (m.biteT <= 0) {
             m.biting = false; m.biteT = 0; m.biteCd = 1.4;
-            if (distance(m.x, m.y, cat.x, cat.y) < BIO_BITE_R + 25) { if (SURV_ON) { survPendingSrc = m.elite ? "精英鼠" : "变异鼠"; if (surv) surv.lastHitXY = { x: m.x, y: m.y }; } bioTakeBite(); }
+            if (distance(m.x, m.y, cat.x, cat.y) < BIO_BITE_R + 25) bioTakeBite();
           }
         } else { m.biting = false; m.biteT = 0; }
       } else if (m.biteCd > 0) { m.biting = false; }
@@ -4677,9 +4789,9 @@
   var surv = null;
   var survPickEl = null;
   function survXpNeed(lv) {
-    // 近似定稿曲线压缩到 1 循环：约 Lv10≈420
-    var tab = [0, 4, 8, 15, 26, 42, 66, 100, 145, 205, 280, 370, 480, 610, 760]; // M4 调平衡：前期更快成型
-    return tab[Math.min(lv, tab.length - 1)] || (760 + (lv - 14) * 160);
+    // OPT1：目标 Lv10≈4:00 · Lv18≈7:00 · Lv22≈9:40
+    var tab = [0, 3, 6, 10, 15, 22, 32, 45, 62, 82, 108, 140, 178, 222, 272, 330, 396, 470, 552, 642, 740, 850, 970];
+    return tab[Math.min(lv, tab.length - 1)] || (970 + (lv - 22) * 140);
   }
   function survWeaponDefs() {
     return {
@@ -4721,6 +4833,9 @@
     surv.magnet = (1 + survPassLv("magnet") * 0.4) * (1 + talLv("magnet") * 0.05);
     surv.tempo = Math.max(0.55, 1 - survPassLv("tempo") * 0.06);
     surv.talClaw = 1 - talLv("claw") * 0.04; surv.talDash = 1 - talLv("dash") * 0.04; surv.talXp = 1 + talLv("greed") * 0.05;
+    surv.dashMax = survPassLv("dcharge") > 0 ? 2 : 1;
+    if (surv.dashCharges == null) surv.dashCharges = surv.dashMax;
+    if (surv.dashCharges > surv.dashMax) surv.dashCharges = surv.dashMax;
   }
   function survDropGem(x, y, v) {
     if (!surv) return;
@@ -4731,9 +4846,12 @@
     surv.kills++; bestNote(m);
     var v = m.type === "gold" ? 8 : m.type === "brown" ? 3 : 1;
     if (m.mutant) v = 12;
-    if (m.elite) v = 30;
+    if (m.elite) v = Math.max(30, survXpNeed(surv.level)); // 精英 ≈ 一整级
     if (m.boss) v = 0;
-    if (v > 0) survDropGem(m.x, m.y, v);
+    if (v > 0) {
+      v = Math.max(1, Math.round(v * (1 + 1.5 * survTimeT()) * (dayNow.night > 0.5 ? 1.3 : 1)));
+      survDropGem(m.x, m.y, v);
+    }
     survM2OnKill(m);
   }
   function survAddXp(v) {
@@ -4748,31 +4866,60 @@
     }
   }
   function survCardPool() {
-    var AD = survAllDefs(), W = AD.W, P = AD.P, out = [];
+    var AD = survAllDefs(), W = AD.W, P = AD.P, out = [], ban = surv.banished || {};
     var wCount = 0; for (var k in surv.weapons) if (surv.weapons[k] > 0 && k !== "main") wCount++;
     var pCount = 0; for (k in surv.passives) if (surv.passives[k] > 0 && k !== "soup") pCount++;
+    var slotsFull = wCount >= 3 && pCount >= 4;
+    var deepWeap = false; for (k in surv.weapons) if (surv.weapons[k] >= 3) deepWeap = true;
+    function pushCard(id, def, lv, once) {
+      if (ban[id]) return;
+      var c = { id: id, def: def, lv: lv, next: lv + 1, once: !!once };
+      out.push(c);
+      if (lv > 0) { out.push(c); out.push(c); } // 已持有权重 ×3
+    }
     for (k in W) {
       var lv = survWeapLv(k);
-      if (lv <= 0 && wCount >= 3) continue; // 通用武器槽 3 + 招牌
+      if (lv <= 0 && (wCount >= 3 || slotsFull || deepWeap)) continue;
       if (lv >= 5) continue;
-      out.push({ id: k, def: W[k], lv: lv, next: lv + 1 });
+      pushCard(k, W[k], lv, false);
     }
     for (k in P) {
       lv = survPassLv(k);
+      if (ban[k]) continue;
       if (k === "fur" && lv >= 1) continue;
-      if (k === "soup") { out.push({ id: k, def: P[k], lv: 0, next: 1, once: true }); continue; }
-      if (lv <= 0 && pCount >= 4) continue; // 被动槽 4
+      if (k === "dcharge" && lv >= 1) continue;
+      if (k === "soup") { if (!slotsFull) out.push({ id: k, def: P[k], lv: 0, next: 1, once: true }); continue; }
+      if (lv <= 0 && (pCount >= 4 || slotsFull)) continue;
       if (lv >= 5) continue;
-      out.push({ id: k, def: P[k], lv: lv, next: lv + 1 });
+      pushCard(k, P[k], lv, false);
     }
-    // shuffle
-    for (var i = out.length - 1; i > 0; i--) { var j = Math.floor(Math.random() * (i + 1)); var t = out[i]; out[i] = out[j]; out[j] = t; }
-    out = survAwakCards(false).concat(out);
-    return out.slice(0, 3);
+    for (var i = out.length - 1; i > 0; i--) { var j = Math.floor(Math.random() * (i + 1)); var tmp = out[i]; out[i] = out[j]; out[j] = tmp; }
+    // 去重保留顺序（权重重复后切片前去重）
+    var seen = {}, uniq = [];
+    for (i = 0; i < out.length; i++) { if (seen[out[i].id]) continue; seen[out[i].id] = 1; uniq.push(out[i]); }
+    return survAwakCards(false).concat(uniq).slice(0, 3);
+  }
+  function survAwakenHint(c) {
+    if (!c || c.awk || c.once) return "";
+    if (c.def.kind === "weapon" && SURV_AWAK[c.id]) {
+      var a = SURV_AWAK[c.id], need = a.need, haveP = survPassLv(need) > 0, left = Math.max(0, 5 - c.next);
+      if (left === 0 && haveP) return "✨ 选后可觉醒「" + a.name + "」";
+      return "→ 觉醒「" + a.name + "」还差：Lv" + (left === 0 ? "5✓" : (c.next + left)) + (haveP ? " · 被动✓" : " · 需要「" + (survAllDefs().P[need] ? survAllDefs().P[need].name : need) + "」");
+    }
+    if (c.def.kind === "passive") {
+      for (var wk in SURV_AWAK) if (SURV_AWAK[wk].need === c.id && survWeapLv(wk) > 0)
+        return "→ 给「" + (survAllDefs().W[wk] ? survAllDefs().W[wk].name : wk) + "」觉醒铺路（武器需 Lv5）";
+    }
+    if (c.id === "main") {
+      var left2 = Math.max(0, 5 - c.next);
+      return left2 === 0 ? "✨ 宝箱可觉醒专属超武" : "→ 专属超武还差 Lv" + (c.next + left2) + "（开宝箱觉醒）";
+    }
+    return "";
   }
   function survApplyCard(c) {
     if (!c) return;
     if (c.awk) { surv.awak[c.awk] = 1; bioShowBanner("✨ " + c.def.name, 2); survRefreshStats(); return; }
+    var awBefore = survAwakCards(false).length;
     if (c.def.kind === "weapon") surv.weapons[c.id] = (surv.weapons[c.id] || 0) + 1;
     else if (c.id === "soup") { bio.hearts = Math.min(bio.maxHearts, bio.hearts + 1); bioShowBanner("🍲 回复 1 心", 1.4); }
     else if (c.id === "fur") {
@@ -4780,11 +4927,13 @@
       bio.hearts = Math.min(bio.maxHearts, bio.hearts + 1); bioShowBanner("🛡️ 厚皮毛 · 上限 +1", 1.6);
     } else surv.passives[c.id] = (surv.passives[c.id] || 0) + 1;
     survRefreshStats();
+    if (!c.awk && survAwakCards(false).length > awBefore) surv.awkPending = true;
   }
   function survEnsurePickUI() {
     if (survPickEl) return survPickEl;
     var el = document.createElement("div");
-    el.id = "survPick"; el.className = "overlay hidden"; el.innerHTML = '<div class="panel surv-pick-panel"><h2>升级！选一张</h2><div class="surv-cards" id="survCards"></div></div>';
+    el.id = "survPick"; el.className = "overlay hidden";
+    el.innerHTML = '<div class="panel surv-pick-panel"><h2>升级！选一张</h2><div class="surv-cards" id="survCards"></div><div class="surv-pick-tools"><button type="button" id="survRerollBtn" class="btn-secondary">🔄 刷新</button><button type="button" id="survBanishBtn" class="btn-secondary">🚫 放逐</button></div><p class="surv-pick-hint" id="survPickHint"></p></div>';
     document.body.appendChild(el);
     survPickEl = el; return el;
   }
@@ -4793,33 +4942,96 @@
     var el = document.getElementById("survPick"); if (el) el.classList.add("hidden");
   }
   var survDbgAutoPick = false;
+  function survFinishPick(c) {
+    var el = survEnsurePickUI();
+    survApplyCard(c); el.classList.add("hidden"); surv.picking = false; surv.banishMode = false;
+    if (surv.awkPending) {
+      surv.awkPending = false;
+      var aw = survAwakCards(true);
+      if (aw.length) { survOpenPick(aw, "✨ 觉醒就绪！"); return; }
+    }
+    if (surv.chestQ > 0) { surv.chestQ--; survOpenChest(); }
+    else if (surv.xp >= survXpNeed(surv.level)) survAddXp(0);
+  }
   function survOpenPick(forced, title) {
     if (!surv || surv.picking) return;
     var cards = forced || survCardPool();
     if (!cards.length) return;
-    if (survDbgAutoPick) { survApplyCard(cards[0]); survRefreshStats && survRefreshStats(); if (surv.chestQ > 0) { surv.chestQ--; survOpenChest(); } return; }
-    surv.picking = true;
+    if (survDbgAutoPick) {
+      var pick = cards[0], best = -1;
+      for (var ai = 0; ai < cards.length; ai++) {
+        var c = cards[ai], score = 0;
+        if (c.awk) score = 100;
+        else if (c.def && c.def.kind === "weapon" && SURV_AWAK[c.id]) {
+          score = 45 + c.next * 12;
+          if (survPassLv(SURV_AWAK[c.id].need) > 0) score += 40;
+          if (c.next >= 4) score += 30;
+        } else if (c.def && c.def.kind === "passive") {
+          for (var wk in SURV_AWAK) if (SURV_AWAK[wk].need === c.id && survWeapLv(wk) > 0) score = Math.max(score, 60 + survWeapLv(wk) * 14);
+          if (c.id === "armor" || c.id === "dashp" || c.id === "dcharge" || c.id === "fur") score = Math.max(score, 28);
+        } else if (c.id === "main") score = 35 + c.next * 8;
+        if (score > best) { best = score; pick = c; }
+      }
+      survApplyCard(pick); survRefreshStats && survRefreshStats();
+      if (surv.awkPending) {
+        surv.awkPending = false;
+        var aw2 = survAwakCards(true);
+        if (aw2.length) { survOpenPick(aw2, "✨ 觉醒就绪！"); return; }
+      }
+      if (surv.chestQ > 0) { surv.chestQ--; survOpenChest(); } return;
+    }
+    surv.picking = true; surv.pickIsChest = !!forced;
     var el = survEnsurePickUI();
     var h2 = el.querySelector("h2"); if (h2) h2.textContent = title || "升级！选一张";
     var box = el.querySelector("#survCards"); box.innerHTML = "";
     cards.forEach(function (c) {
-      var b = document.createElement("button"); b.type = "button"; b.className = "surv-card";
-      b.innerHTML = "<div class=\"ic\">" + c.def.icon + "</div><div class=\"nm\">" + c.def.name + (c.once ? "" : (" Lv" + c.next)) + "</div><div class=\"ds\">" + c.def.desc(c.next) + "</div>";
+      var b = document.createElement("button"); b.type = "button"; b.className = "surv-card" + (c.awk ? " awk" : "");
+      var hint = survAwakenHint(c);
+      b.innerHTML = "<div class=\"ic\">" + c.def.icon + "</div><div class=\"nm\">" + c.def.name + (c.once ? "" : (" Lv" + c.next)) + "</div><div class=\"ds\">" + c.def.desc(c.next) + "</div>" + (hint ? "<div class=\"ah\">" + hint + "</div>" : "");
       b.addEventListener("click", function () {
-        survApplyCard(c); el.classList.add("hidden"); surv.picking = false;
-        // 若经验仍够连升
-        if (surv.chestQ > 0) { surv.chestQ--; survOpenChest(); }
-        else if (surv.xp >= survXpNeed(surv.level)) survAddXp(0);
+        if (surv.banishMode) {
+          if (c.awk || c.id === "main" || c.id === "soup") { bioShowBanner("这张不能放逐", 1.2); return; }
+          surv.banished[c.id] = 1; surv.banishLeft = Math.max(0, (surv.banishLeft || 0) - 1); surv.banishMode = false;
+          bioShowBanner("已放逐「" + c.def.name + "」", 1.4);
+          surv.picking = false; survOpenPick(null, title);
+          return;
+        }
+        survFinishPick(c);
       });
       box.appendChild(b);
     });
+    var hint = el.querySelector("#survPickHint");
+    if (hint) hint.textContent = "刷新 " + (surv.rerollLeft || 0) + " 次 · 放逐 " + (surv.banishLeft || 0) + " 次" + (surv.banishMode ? " · 点一张卡放逐它" : "");
+    var rb = el.querySelector("#survRerollBtn"), bb = el.querySelector("#survBanishBtn");
+    if (rb) {
+      rb.disabled = !(surv.rerollLeft > 0) || !!forced;
+      rb.onclick = function () {
+        if (!(surv.rerollLeft > 0) || forced) return;
+        surv.rerollLeft--; sfx.click();
+        surv.picking = false; survOpenPick(null, title);
+      };
+    }
+    if (bb) {
+      bb.disabled = !(surv.banishLeft > 0) || !!forced;
+      bb.classList.toggle("on", !!surv.banishMode);
+      bb.onclick = function () {
+        if (!(surv.banishLeft > 0) || forced) return;
+        surv.banishMode = !surv.banishMode; sfx.click();
+        bb.classList.toggle("on", !!surv.banishMode);
+        if (hint) hint.textContent = surv.banishMode ? "点一张卡放逐（本局不再出现）" : ("刷新 " + (surv.rerollLeft || 0) + " 次 · 放逐 " + (surv.banishLeft || 0) + " 次");
+      };
+    }
     el.classList.remove("hidden");
   }
   function survTryDash(wx, wy) {
-    if (!survActive() || surv.picking || surv.dashCd > 0 || surv.dashT > 0) return false;
+    if (!survActive() || surv.picking || surv.dashT > 0) return false;
+    if ((surv.dashCharges || 0) <= 0) return false;
     var dx = wx - cat.x, dy = wy - cat.y, d = Math.sqrt(dx * dx + dy * dy);
     if (d < 8) { dx = Math.cos(cat.facing) || 1; dy = Math.sin(cat.facing) || 0; d = 1; }
-    surv.dashN = (surv.dashN || 0) + 1; surv.dashUx = dx / d; surv.dashUy = dy / d; surv.dashT = SURV_DASH_DUR; surv.dashCd = Math.max(1.2, SURV_DASH_CD - survPassLv("dashp") * 0.3) * (surv.talDash || 1);
+    surv.dashN = (surv.dashN || 0) + 1; surv.dashUx = dx / d; surv.dashUy = dy / d; surv.dashT = SURV_DASH_DUR;
+    surv.dashCharges--;
+    var cd = Math.max(1.2, SURV_DASH_CD - survPassLv("dashp") * 0.3) * (surv.talDash || 1);
+    if (surv.dashCd <= 0) surv.dashCd = cd; // 已在转的冷却不重置
     bio.iFrames = Math.max(bio.iFrames, SURV_DASH_IFRAME);
     buzz(12); feedback("wave");
     return true;
@@ -4833,7 +5045,8 @@
       m._survXpDone = false; onCapture(m); recycleMouse(idx); return true;
     }
     if (m.hitInv > 0) return false;
-    m.hp = (m.hp == null ? 2 : m.hp) - dmg; m.hitInv = 0.25; m.flash = 0.3;
+    if (m.boss && m.weak > 0) dmg *= 2;
+    m.hp = (m.hp == null ? 2 : m.hp) - dmg; m.hitInv = m.elite ? 0.12 : 0.25; m.flash = 0.3;
     if (m.hp <= 0) { var i2 = mice.indexOf(m); if (i2 >= 0) { m._survXpDone = false; onCapture(m); recycleMouse(i2); } return true; }
     buzz(6); return false;
   }
@@ -4847,9 +5060,10 @@
     return arr.slice(0, n);
   }
   function survAutoPounce() {
-    var list = survNearestMice(1, SURV_AUTO_R * entityScaleMult);
+    var list = survNearestMice(10, SURV_AUTO_R * entityScaleMult);
     if (!list.length) return;
     var m = list[0].m;
+    for (var ai = 0; ai < list.length; ai++) if (list[ai].m.elite || list[ai].m.boss) { m = list[ai].m; break; }
     survDamageMouse(m, 1);
     sigFxAdd({ type: "ring", x: m.x, y: m.y, r: 18, col: "rgba(255,180,80,", life: 0.25 });
     cat.squash = 1; buzz(8);
@@ -4888,7 +5102,7 @@
     // M4：环形补怪——身边太空时在 320~380 半径补鼠，保证经验来源（每秒最多 3 只）
     surv.ringAcc = (surv.ringAcc || 0) + dt * 3;
     if (surv.ringAcc >= 1) {
-      var tt = survTimeT(), want = Math.round((6 + 28 * tt) * (dayNow.night > 0.5 ? 1.35 : 1) * (elapsedPlayTime < 90 ? 0.8 : 1)), near = 0, R = 420 * entityScaleMult;
+      var tt = survTimeT(), want = Math.round((5 + 24 * tt) * (dayNow.night > 0.5 ? 1.25 : 1) * (elapsedPlayTime < 90 ? 0.7 : 1)), near = 0, R = 420 * entityScaleMult;
       for (var qi = 0; qi < mice.length; qi++) if (distance(mice[qi].x, mice[qi].y, cat.x, cat.y) < R) near++;
       while (surv.ringAcc >= 1) {
         surv.ringAcc -= 1;
@@ -4932,7 +5146,7 @@
   // =======================================================================
   // v24 SURVIVORS M2：3 循环 / 精英词缀 / 鼠王 / 宝箱 / 六猫主武 / 全池+觉醒 / 小偷鼠 / 弱机上限
   // =======================================================================
-  var SURV_BOSS_AT = 580, SURV_BOSS_SURVIVE = 60, SURV_ELITE_AT = [170, 285, 400, 470, 520];
+  var SURV_BOSS_AT = 580, SURV_BOSS_SURVIVE = 60, SURV_ELITE_AT = [190, 300, 410, 480, 530];
   var SURV_MAIN = {
     orange: { name: "橘风旋扑", sup: "猛虎扑杀", icon: "🌀", cd: 5, desc: function (lv) { return "每 " + (5 - lv * 0.4).toFixed(1) + "s 震开周围鼠并眩晕"; } },
     black: { name: "影缚", sup: "暗影处决", icon: "🌑", cd: 4.5, desc: function (lv) { return "定身最近 " + (2 + lv) + " 只 1.5s"; } },
@@ -4960,6 +5174,8 @@
     surv.weapons.main = 1; surv.awak = {}; surv.chestsOnMap = []; surv.eliteDone = {}; surv.boss = null; surv.bossSpawned = false;
     surv.bossKilled = false; surv.thiefT = 22; surv.mainT = 1.2; surv.clawT = 1; surv.bellA = 0; surv.milk = []; surv.milkT = 2;
     surv.fx = []; surv.dmgSrc = {}; surv.lastHitBy = null; surv.chestOpen = false; surv.stolenTotal = 0;
+    surv.rerollLeft = 2; surv.banishLeft = 1; surv.banished = {}; surv.banishMode = false; surv.chestN = 0; surv.chestQ = 0;
+    surv.eliteWarn = {}; surv.elitePending = null; surv.awkPending = false; surv.dashCharges = 1; surv.dashMax = 1;
   }
   function survAddDefs(W, P) {
     var md = survMainDef();
@@ -4970,6 +5186,7 @@
     P.armor = { name: "软垫", icon: "🧸", kind: "passive", desc: function (lv) { return "受伤无敌 +" + (lv * 0.15).toFixed(2) + "s"; } };
     P.growth = { name: "学识", icon: "📖", kind: "passive", desc: function (lv) { return "经验 +" + (lv * 10) + "%"; } };
     P.dashp = { name: "猫步", icon: "🐈", kind: "passive", desc: function (lv) { return "冲刺冷却 -" + (lv * 0.3).toFixed(1) + "s"; } };
+    P.dcharge = { name: "连扑", icon: "💨", kind: "passive", desc: function (lv) { return "冲刺可储存 2 次（冷却轮流回复）"; } };
   }
   function survAwakCards(includeMain) {
     var out = [];
@@ -4987,21 +5204,35 @@
   function survChestCards() {
     var aw = survAwakCards(true);
     var AD = survAllDefs(), W = AD.W, P = AD.P, up = [];
-    for (var k in surv.weapons) if (surv.weapons[k] > 0 && surv.weapons[k] < 5 && W[k]) up.push({ id: k, def: W[k], lv: surv.weapons[k], next: surv.weapons[k] + 1 });
-    for (k in surv.passives) if (surv.passives[k] > 0 && surv.passives[k] < 5 && P[k] && k !== "fur") up.push({ id: k, def: P[k], lv: surv.passives[k], next: surv.passives[k] + 1 });
-    for (var i = up.length - 1; i > 0; i--) { var j = Math.floor(Math.random() * (i + 1)); var t = up[i]; up[i] = up[j]; up[j] = t; }
+    for (var k in surv.weapons) if (surv.weapons[k] > 0 && surv.weapons[k] < 5 && W[k] && !(surv.banished && surv.banished[k])) up.push({ id: k, def: W[k], lv: surv.weapons[k], next: surv.weapons[k] + 1 });
+    for (k in surv.passives) if (surv.passives[k] > 0 && surv.passives[k] < 5 && P[k] && k !== "fur" && !(surv.banished && surv.banished[k])) up.push({ id: k, def: P[k], lv: surv.passives[k], next: surv.passives[k] + 1 });
+    for (var i = up.length - 1; i > 0; i--) { var j = Math.floor(Math.random() * (i + 1)); var tmp = up[i]; up[i] = up[j]; up[j] = tmp; }
+    // 宝箱：可觉醒项保底；否则优先最接近 Lv5 的已有武器
+    up.sort(function (a, b) { return b.lv - a.lv; });
     var out = aw.concat(up);
+    if (aw.length) out = aw.concat(up.filter(function (c) { return !c.awk; }));
     if (!out.length) out = [{ id: "soup", def: P.soup, lv: 0, next: 1, once: true }];
     return out.slice(0, 3);
   }
   // ---- 精英 ----
   function survSpawnElite(affix, at) {
-    var keys = Object.keys(SURV_AFFIX); affix = affix || keys[Math.floor(Math.random() * keys.length)];
+    var keys = Object.keys(SURV_AFFIX);
+    if (!affix && !(surv.eliteDone && Object.keys(surv.eliteDone).length)) affix = "regen";
+    affix = affix || keys[Math.floor(Math.random() * keys.length)];
     var p = at || ringPointNear(260);
     var m = spawnMouseAt(p.x, p.y, "brown", survTimeT(), "wander");
-    m.mutant = true; m.elite = affix; m.hp = m.maxHp = Math.round((6 + 18 * survTimeT()) * (affix === "shield" ? 1.6 : 1));
-    m.biteCd = 0; m.biting = false; m.infectAcc = 0; m.infectTarget = null; m.noInfect = true;
-    bioShowBanner("⚠ 精英鼠 · " + SURV_AFFIX[affix].name, 2); buzz(15);
+    m.mutant = true; m.elite = affix; m.noInfect = true;
+    var weaps = 0; for (var wk in surv.weapons) if (surv.weapons[wk] > 0) weaps++;
+    var dps = 1.2 + surv.level * 0.25 + weaps * 0.35;
+    var hp = Math.round(dps * 5 * (affix === "shield" ? 1.3 : 1));
+    var firstElite = Object.keys(surv.eliteDone || {}).length <= 1;
+    if (firstElite) hp = Math.min(hp, 12);
+    m.hp = m.maxHp = Math.max(firstElite ? 8 : 10, hp);
+    m.eliteFirst = firstElite;
+    m.hitInv = 0;
+    m.biteCd = 0; m.biting = false; m.infectAcc = 0; m.infectTarget = null;
+    bioShowBanner("⚠ 精英鼠 · " + SURV_AFFIX[affix].name, 2); buzz(15); shakeT = 0.15; shakeAmp = 3;
+    bio.iFrames = Math.max(bio.iFrames, 1.5); // 出场宽限，避免贴脸秒掉
     return m;
   }
   function ringPointNear(r) {
@@ -5012,7 +5243,8 @@
   function survSpawnBoss() {
     var p = ringPointNear(300);
     var m = spawnMouseAt(p.x, p.y, "brown", 1, "wander");
-    m.mutant = true; m.boss = true; m.survCtl = true; m.noInfect = true; m.hp = m.maxHp = 260; m.phase = 1; m.bT = 3; m.charge = 0;
+    m.mutant = true; m.boss = true; m.survCtl = true; m.noInfect = true;
+    m.hp = m.maxHp = 90; m.phase = 1; m.bT = 3; m.charge = 0; m.weak = 0; m.bStun = 0;
     surv.boss = m; surv.bossSpawned = true; surv.bossAt = elapsedPlayTime;
     bioShowBanner("👑 鼠王降临！击杀或坚持 " + SURV_BOSS_SURVIVE + "s", 3); buzz(40); shakeT = 0.3; shakeAmp = 6;
   }
@@ -5024,21 +5256,28 @@
     if (ph !== b.phase) { b.phase = ph; bioShowBanner(ph === 2 ? "鼠王召唤鼠群！" : "鼠王狂暴！", 2); shakeT = 0.25; shakeAmp = 5; }
     if (b.hitInv > 0) b.hitInv -= dt; if (b.flash > 0) b.flash -= dt;
     if (b.regenT > 0) b.regenT -= dt;
+    if (b.weak > 0) b.weak -= dt; if (b.bStun > 0) b.bStun -= dt;
     var dx = cat.x - b.x, dy = cat.y - b.y, d = Math.sqrt(dx * dx + dy * dy) || 1;
     var sp = (ph === 3 ? 125 : 85) * esm;
-    if (b.charge > 0) { b.charge -= dt; b.x += b.cux * 430 * esm * dt; b.y += b.cuy * 430 * esm * dt; }
+    if (b.bStun > 0) { /* 撞墙晕眩 */ }
+    else if (b.charge > 0) {
+      b.charge -= dt; b.x += b.cux * 430 * esm * dt; b.y += b.cuy * 430 * esm * dt;
+      var obs = queryNearbyObstacles(b.x, b.y), hitWall = false, br = 28 * esm;
+      for (var oi = 0; oi < obs.length; oi++) if (circleOverlapsAabb(b.x, b.y, br, obs[oi])) { hitWall = true; break; }
+      if (!hitWall && (Math.abs(b.x) > 2400 || Math.abs(b.y) > 2400)) hitWall = true;
+      if (hitWall) { b.charge = 0; b.bStun = 2; b.weak = 2; bioShowBanner("💫 鼠王撞晕了！全力输出！", 1.6); buzz(25); shakeT = 0.2; shakeAmp = 5; }
+    }
     else if (b.wind > 0) { b.wind -= dt; if (b.wind <= 0) { b.charge = 0.55; b.cux = dx / d; b.cuy = dy / d; } }
     else { b.x += dx / d * sp * dt; b.y += dy / d * sp * dt; }
     if (TERR) TERR.push(b);
     b.vx = dx / d; b.vy = dy / d; b.facing = Math.atan2(dy, dx); b.runCycle += dt * 3;
     b.bT -= dt;
-    if (b.bT <= 0) {
+    if (b.bT <= 0 && b.bStun <= 0) {
       if (ph === 1) { b.wind = 0.7; b.bT = 5; }
       else if (ph === 2) { b.bT = 6; for (var i = 0; i < 8 && mice.length < mouseCap(); i++) { var a = i / 8 * 6.283; spawnMouseAt(b.x + Math.cos(a) * 40, b.y + Math.sin(a) * 40, "grey", 1, "wander"); } b.wind = 0.7; }
       else { b.bT = 4; b.wind = 0.5; surv.fx.push({ t: "wave", x: b.x, y: b.y, r: 20, life: 1.6, hit: false }); }
     }
-    // 接触（大体型）
-    if (d < (46 * esm + cat.r) && bio.iFrames <= 0) { surv.lastHitBy = "鼠王"; surv.lastHitXY = { x: b.x, y: b.y }; survPendingSrc = "鼠王"; bioTakeBite(); if (bioDeath) bioDeath = "boss"; }
+    if (d < (46 * esm + cat.r) && bio.iFrames <= 0 && b.bStun <= 0) { surv.lastHitBy = "鼠王"; surv.lastHitXY = { x: b.x, y: b.y }; survPendingSrc = "鼠王"; bioTakeBite(); if (bioDeath) bioDeath = "boss"; }
   }
   function survNoteDmg(src) { surv.dmgSrc[src] = (surv.dmgSrc[src] || 0) + 1; surv.lastHitBy = src; }
   // ---- 小偷鼠 ----
@@ -5124,14 +5363,27 @@
     surv.mainT -= dt; if (surv.mainT <= 0) { surv.mainT = Math.max(1.6, (survMainDef().cd - survWeapLv("main") * 0.4)) * surv.tempo; survFireMain(); }
     surv.clawT -= dt; if (survWeapLv("claw") > 0 && surv.clawT <= 0) { surv.clawT = 2.2 * surv.tempo; survFireClaw(); }
     survUpdateBells(dt); survUpdateMilk(dt);
-    // 精英时间轴（仅 3 循环版本）
-    if (SURV_CYCLES >= 3) for (var i = 0; i < SURV_ELITE_AT.length; i++) if (t >= SURV_ELITE_AT[i] && !surv.eliteDone[i]) { surv.eliteDone[i] = true; survSpawnElite(); }
+    // 精英时间轴：提前 3 秒预警，到点再刷
+    if (SURV_CYCLES >= 3) for (var i = 0; i < SURV_ELITE_AT.length; i++) {
+      if (!surv.eliteWarn[i] && t >= SURV_ELITE_AT[i] - 3) {
+        surv.eliteWarn[i] = true;
+        var ang = Math.random() * 6.283;
+        surv.elitePending = { i: i, ang: ang, at: SURV_ELITE_AT[i], affix: i === 0 ? "regen" : null };
+        bioShowBanner("⚠ 精英鼠即将出现！看红箭头", 2.2); buzz(18);
+      }
+      if (!surv.eliteDone[i] && t >= SURV_ELITE_AT[i]) {
+        surv.eliteDone[i] = true;
+        var pend = surv.elitePending && surv.elitePending.i === i ? surv.elitePending : null;
+        var pos = pend ? { x: cat.x + Math.cos(pend.ang) * 260 * entityScaleMult, y: cat.y + Math.sin(pend.ang) * 260 * entityScaleMult } : null;
+        survSpawnElite(pend && pend.affix, pos); surv.elitePending = null;
+      }
+    }
     if (SURV_CYCLES >= 3 && !surv.bossSpawned && t >= SURV_BOSS_AT) survSpawnBoss();
     survBossUpdate(dt);
     // 精英光环
     for (i = 0; i < mice.length; i++) {
       var e = mice[i]; if (!e.elite) continue;
-      if (e.elite === "regen") e.hp = Math.min(e.maxHp, e.hp + dt * 0.8);
+      if (e.elite === "regen") e.hp = Math.min(e.maxHp, e.hp + dt * (e.eliteFirst ? 0.25 : 0.55));
       var A = 110 * entityScaleMult;
       gridEach(e.x, e.y, A, function (o) { if (o === e) return; if (e.elite === "haste") o.hasteT = 0.3; else if (e.elite === "shield") o.shieldT = 0.3; else if (o.mutant && o.hp < 2) o.hp += dt * 0.3; });
     }
@@ -5162,11 +5414,16 @@
   }
   function survOpenChest() {
     if (surv.picking) { surv.chestQ = (surv.chestQ || 0) + 1; return; }
+    surv.chestN = (surv.chestN || 0) + 1;
     var cards = survChestCards(); if (!cards.length) return;
     survOpenPick(cards, "🎁 宝箱！选一项");
   }
   function survM2OnKill(m) {
-    if (m.elite) { surv.chestsOnMap.push({ x: m.x, y: m.y }); bioShowBanner("🎁 精英掉落宝箱", 1.6); }
+    if (m.elite) {
+      surv.chestsOnMap.push({ x: m.x, y: m.y });
+      bio.hearts = Math.min(bio.maxHearts, bio.hearts + 1);
+      bioShowBanner("🎁 精英掉落宝箱 · 回 1 心", 1.8);
+    }
     if (m.thief && m.stolen > 0) survDropGem(m.x, m.y, m.stolen);
     if (m.boss) { surv.boss = null; survWin(true); }
   }
@@ -5179,7 +5436,7 @@
     for (i = 0; i < mice.length; i++) {
       var m = mice[i], sx = worldToScreenX(m.x), sy = worldToScreenY(m.y);
       if (sx < -80 || sx > W + 80 || sy < -80 || sy > H + 80) continue;
-      if (m.elite) { var af = SURV_AFFIX[m.elite]; ctx.strokeStyle = af.col + ".7)"; ctx.lineWidth = s(3); ctx.beginPath(); ctx.arc(sx, sy, s(22 * esm), 0, 6.283); ctx.stroke(); ctx.globalAlpha = 0.12; ctx.fillStyle = af.col + "1)"; ctx.beginPath(); ctx.arc(sx, sy, s(110 * esm), 0, 6.283); ctx.fill(); ctx.globalAlpha = 1; emojiQuick(af.ic, sx, sy - s(30), s(14)); survBar(sx - s(18), sy - s(22), s(36), m.hp / m.maxHp, "#ff6a4a"); }
+      if (m.elite) { var af = SURV_AFFIX[m.elite]; ctx.strokeStyle = af.col + ".7)"; ctx.lineWidth = s(3); ctx.beginPath(); ctx.arc(sx, sy, s(22 * esm), 0, 6.283); ctx.stroke(); if (mice.length < 90) { ctx.globalAlpha = 0.1; ctx.fillStyle = af.col + "1)"; ctx.beginPath(); ctx.arc(sx, sy, s(110 * esm), 0, 6.283); ctx.fill(); ctx.globalAlpha = 1; } emojiQuick(af.ic, sx, sy - s(30), s(14)); survBar(sx - s(18), sy - s(22), s(36), m.hp / m.maxHp, "#ff6a4a"); }
       if (m.thief && m.stolen > 0) { emojiQuick("🐟", sx, sy - s(24), s(12)); ctx.fillStyle = "#fff"; ctx.font = "800 " + Math.round(s(10)) + "px sans-serif"; ctx.textAlign = "left"; ctx.fillText("×" + m.stolen, sx + s(7), sy - s(20)); }
       else if (m.thief) emojiQuick("🦹", sx, sy - s(22), s(11));
       if (m.boss) { emojiQuick("👑", sx, sy - s(62 * esm), s(30)); if (m.wind > 0) { ctx.strokeStyle = "rgba(255,60,60,.8)"; ctx.lineWidth = s(4); ctx.beginPath(); ctx.arc(sx, sy, s(50 * esm), 0, 6.283); ctx.stroke(); } }
@@ -5287,7 +5544,13 @@
     if (!survActive() || state !== STATE_PLAY) return;
     if (surv.picking) return;
     if (surv.invuln) bio.iFrames = Math.max(bio.iFrames, 1);
-    surv.dashCd = Math.max(0, surv.dashCd - dt);
+    if (surv.dashCd > 0) {
+      surv.dashCd = Math.max(0, surv.dashCd - dt);
+      if (surv.dashCd <= 0 && surv.dashCharges < surv.dashMax) {
+        surv.dashCharges++;
+        if (surv.dashCharges < surv.dashMax) surv.dashCd = Math.max(1.2, SURV_DASH_CD - survPassLv("dashp") * 0.3) * (surv.talDash || 1);
+      }
+    }
     surv.autoCd = Math.max(0, surv.autoCd - dt);
     surv.chainT -= dt; surv.fearT -= dt;
     // dash move
@@ -5296,10 +5559,13 @@
       var step = SURV_DASH_SPD * entityScaleMult * dt;
       cat.x += surv.dashUx * step; cat.y += surv.dashUy * step; cat.facing = Math.atan2(surv.dashUy, surv.dashUx);
       var ob = queryNearbyObstacles(cat.x, cat.y); for (var j = 0; j < ob.length; j++) resolveCircleAabb(cat, ob[j]); if (TERR) TERR.push(cat);
-      for (var i = 0; i < mice.length; i++) {
-        var m = mice[i]; if (!uniOk(m)) continue;
-        if (distance(m.x, m.y, cat.x, cat.y) < 50 * entityScaleMult) {
-          m.vx = surv.dashUx * 320; m.vy = surv.dashUy * 320; m.stun = Math.max(m.stun || 0, 0.25);
+      for (var i = mice.length - 1; i >= 0; i--) {
+        var m = mice[i]; if (!uniOk(m) || m.dashHit === surv.dashN) continue;
+        if (distance(m.x, m.y, cat.x, cat.y) < 52 * entityScaleMult) {
+          m.dashHit = surv.dashN;
+          if (m.boss) { survDamageMouse(m, 1); }
+          else if (m.mutant || m.elite) { survDamageMouse(m, 1); survPush(m, 280); }
+          else { survDamageMouse(m, 1); } // 普鼠：冲刺直接撞飞击杀
         }
       }
     }
@@ -5363,12 +5629,18 @@
       surv.contactT += dt;
       if (surv.contactT >= SURV_CONTACT_WIND) {
         surv.contactT = -SURV_CONTACT_CD; surv.lastHitXY = { x: biter.x, y: biter.y }; survPendingSrc = biter.elite ? "精英鼠" : biter.mutant ? "变异鼠" : (biter.type === "brown" ? "棕鼠" : "灰鼠");
-        // M4 调平衡：普通鼠只是“啃一口”，攒满才掉一颗心（第一个昼夜 4 口，之后 3 口）；精英/变异直接掉心
+        // OPT1：精英单次最多掉 1 心 + 2s 保护；普通鼠仍是啃一口
         var heavy = biter.elite || biter.mutant;
-        var need = elapsedPlayTime < CYCLE_T ? 4 : (dayNow.night > 0.5 ? 3 : 4);
-        if (heavy && elapsedPlayTime < CYCLE_T) heavy = false; // 第一个昼夜：精英/变异也只算 2 口
-        if (!heavy) { surv.nibble = (surv.nibble || 0) + ((biter.elite || biter.mutant) ? 2 : 1); if (surv.nibble < need) { bio.iFrames = 0.45; buzz(10); sigFxAdd({ type: "ring", x: cat.x, y: cat.y, r: 26, col: "rgba(255,90,90,", life: 0.25 }); bioShowBanner("被啃了一口 " + surv.nibble + "/" + need, 0.9); } }
-        if (heavy || surv.nibble >= need) { surv.nibble = 0; bioTakeBite(); if (bioDeath) bioDeath = "horde"; }
+        var need = elapsedPlayTime < CYCLE_T ? 5 : (dayNow.night > 0.5 ? 3 : 4);
+        if (biter.elite) {
+          surv.nibble = 0; bioTakeBite(); bio.iFrames = Math.max(bio.iFrames, 2.4);
+          survPush(biter, 520); biter.stun = Math.max(biter.stun || 0, 1.6);
+          if (bioDeath) bioDeath = "horde";
+        } else {
+          if (heavy && elapsedPlayTime < CYCLE_T) heavy = false;
+          if (!heavy) { surv.nibble = (surv.nibble || 0) + (biter.mutant ? 2 : 1); if (surv.nibble < need) { bio.iFrames = 0.45; buzz(10); sigFxAdd({ type: "ring", x: cat.x, y: cat.y, r: 26, col: "rgba(255,90,90,", life: 0.25 }); bioShowBanner("被啃了一口 " + surv.nibble + "/" + need, 0.9); } }
+          if (heavy || surv.nibble >= need) { surv.nibble = 0; bioTakeBite(); if (bioDeath) bioDeath = "horde"; }
+        }
       }
     } else if (surv.contactT > 0) surv.contactT = Math.max(0, surv.contactT - dt * 2);
     else if (surv.contactT < 0) surv.contactT = Math.min(0, surv.contactT + dt); // CD 倒数
@@ -5381,22 +5653,37 @@
     if (surv.awak) survM2Draw();
     survM4Draw();
     // gems
-    for (var i = 0; i < surv.gems.length; i++) {
+    var gemN = surv.gems.length, gemStep = gemN > 70 ? 2 : 1;
+    for (var i = 0; i < gemN; i += gemStep) {
       var g = surv.gems[i], sx = worldToScreenX(g.x), sy = worldToScreenY(g.y);
       if (sx < -20 || sx > W + 20 || sy < -20 || sy > H + 20) continue;
       var al = g.age > g.life - 2 ? Math.max(0.2, (g.life - g.age) / 2) : 1;
-      emojiQuick(g.merge || g.v >= 8 ? "🐟" : "🐟", sx, sy - s(4), s(g.merge || g.v >= 5 ? 16 : 12), al);
+      emojiQuick("🐟", sx, sy - s(4), s(g.merge || g.v >= 5 ? 16 : 12), al);
     }
     // yarn
     for (i = 0; i < surv.yarn.length; i++) {
       var y = surv.yarn[i]; emojiQuick("🧶", worldToScreenX(y.x), worldToScreenY(y.y), s(14), Math.min(1, y.life * 2));
     }
-    // dash CD ring at feet
-    if (surv.dashCd > 0 || surv.dashT > 0) {
+    // dash CD / charges ring at feet
+    {
       var csx = worldToScreenX(cat.x), csy = worldToScreenY(cat.y) + s(14);
-      var fr = 1 - surv.dashCd / SURV_DASH_CD; if (surv.dashT > 0) fr = 1;
-      ctx.strokeStyle = "rgba(255,220,120,.85)"; ctx.lineWidth = s(3);
-      ctx.beginPath(); ctx.arc(csx, csy, s(20), -Math.PI / 2, -Math.PI / 2 + fr * 6.283); ctx.stroke();
+      var maxC = surv.dashMax || 1, ch = surv.dashCharges || 0;
+      var fr = surv.dashT > 0 ? 1 : (surv.dashCd > 0 ? 1 - surv.dashCd / Math.max(0.01, SURV_DASH_CD) : 1);
+      ctx.strokeStyle = ch > 0 ? "rgba(255,220,120,.9)" : "rgba(180,180,180,.55)"; ctx.lineWidth = s(3);
+      ctx.beginPath(); ctx.arc(csx, csy, s(20), -Math.PI / 2, -Math.PI / 2 + Math.max(0.05, fr) * 6.283); ctx.stroke();
+      if (maxC > 1) {
+        ctx.fillStyle = "#fff8c0"; ctx.font = "800 " + Math.round(s(11)) + "px sans-serif"; ctx.textAlign = "center";
+        ctx.fillText(ch + "/" + maxC, csx, csy + s(4));
+      }
+    }
+    // 精英预警箭头
+    if (surv.elitePending) {
+      var ea = surv.elitePending.ang, ex = W / 2 + Math.cos(ea) * (Math.min(W, H) * 0.42), ey = H / 2 + Math.sin(ea) * (Math.min(W, H) * 0.42);
+      var pulse = 0.55 + 0.45 * Math.sin(elapsedPlayTime * 10);
+      ctx.fillStyle = "rgba(255,40,40," + pulse.toFixed(2) + ")";
+      ctx.beginPath(); ctx.moveTo(ex, ey); ctx.lineTo(ex - Math.cos(ea) * s(22) - Math.sin(ea) * s(12), ey - Math.sin(ea) * s(22) + Math.cos(ea) * s(12));
+      ctx.lineTo(ex - Math.cos(ea) * s(22) + Math.sin(ea) * s(12), ey - Math.sin(ea) * s(22) - Math.cos(ea) * s(12)); ctx.closePath(); ctx.fill();
+      emojiQuick("⚠", ex - Math.cos(ea) * s(34), ey - Math.sin(ea) * s(34), s(16));
     }
     // level chip
     ctx.globalAlpha = 0.9; ctx.fillStyle = "rgba(40,24,16,.55)";
@@ -5571,10 +5858,15 @@
     var label = document.createElement("div");
     label.textContent = skillOf(k.id).icon + k.name;
     b.appendChild(label);
+    var bd = document.createElement("div"); bd.className = "skin-badges"; bd.dataset.skin = k.id; b.appendChild(bd);
     b.addEventListener("click", function () { selectSkin(k.id); });
     skinGrid.appendChild(b);
     skinCards.push(b);
   });
+  function paintSkinBadges() {
+    var nodes = document.querySelectorAll(".skin-badges");
+    for (var i = 0; i < nodes.length; i++) nodes[i].innerHTML = badgeRowHtml(nodes[i].dataset.skin);
+  }
   function paintSkinCards() {
     for (var i = 0; i < skinCards.length; i++) {
       paintSkinCanvas(skinCards[i].querySelector("canvas"), skinCards[i].dataset.skin, 0.95, 0.6);
@@ -5590,7 +5882,7 @@
     void w;
   }
   selectSkin(currentSkin);
-  requestAnimationFrame(paintSkinCards);
+  requestAnimationFrame(function () { paintSkinCards(); paintSkinBadges(); });
   window.addEventListener("resize", paintSkinCards);
 
   diceBtn.addEventListener("click", function () {
@@ -5650,7 +5942,7 @@
     get state() { return state; },
     get cat() { return { x: cat.x, y: cat.y, vx: cat.vx, vy: cat.vy }; },
     get camera() { return { x: camera.x, y: camera.y }; },
-    get mice() { return mice.map(function (m) { return { id: m.seed, x: m.x, y: m.y, type: m.type, state: m.state, beh: m.beh, under: !!m.under, asleep: !!m.asleep, leader: !!m.leader, packId: m.packId || 0, stun: m.stun > 0, mutant: !!m.mutant, hp: m.hp || 0, biteT: m.biteT || 0 }; }); },
+    get mice() { return mice.map(function (m) { return { id: m.seed, x: m.x, y: m.y, type: m.type, state: m.state, beh: m.beh, under: !!m.under, asleep: !!m.asleep, leader: !!m.leader, packId: m.packId || 0, stun: m.stun > 0, mutant: !!m.mutant, elite: m.elite || null, boss: !!m.boss, hp: m.hp || 0, maxHp: m.maxHp || 0, biteT: m.biteT || 0 }; }); },
     get behCounts() { var c = {}; mice.forEach(function (m) { c[m.beh] = (c[m.beh] || 0) + 1; }); return c; },
     get aimLog() { return aimLog.slice(); },
     get planLog() { return planLog.slice(); },
@@ -5752,7 +6044,7 @@
     survChestCards: function () { return survChestCards().map(function (c) { return c.def.name; }); },
     survSpawnThief: function () { for (var i = 0; i < 6; i++) survDropGem(cat.x + 150 + i * 10, cat.y + 40, 2); var m = survSpawnThief(); if (m) { m.x = cat.x + 100; m.y = cat.y + 40; } return !!m; },
     get survThieves() { return mice.filter(function (m) { return m.thief; }).map(function (m) { return { stolen: m.stolen, x: m.x, y: m.y }; }); },
-    get survExt() { return surv ? { awak: Object.assign({}, surv.awak), chests: surv.chestsOnMap.length, dmgSrc: Object.assign({}, surv.dmgSrc), bossKilled: surv.bossKilled, dur: survRunDur(), cap: mouseCap(), weak: survIsWeak(), elites: mice.filter(function (m) { return m.elite; }).length } : null; },
+    get survExt() { return surv ? { awak: Object.assign({}, surv.awak), chests: surv.chestsOnMap.length, chestN: surv.chestN || 0, dmgSrc: Object.assign({}, surv.dmgSrc), bossKilled: surv.bossKilled, dur: survRunDur(), cap: mouseCap(), weak: survIsWeak(), elites: mice.filter(function (m) { return m.elite; }).length } : null; },
     get surv() { return surv ? { level: surv.level, xp: surv.xp, kills: surv.kills, gems: surv.gems.length, dashCd: surv.dashCd, weapons: Object.assign({}, surv.weapons), passives: Object.assign({}, surv.passives), won: surv.won, cycles: SURV_CYCLES, spawnMult: surv.spawnMult } : null; },
 
     forceBiteCheck: function () { return { biteR: BIO_BITE_R, infectR: BIO_INFECT_R, esm: entityScaleMult }; },
