@@ -3,7 +3,7 @@
 > 俯视角割草生存小游戏（原「小猫抓老鼠」）：撑过三个昼夜，9:40 鼠王降临——击败它或坚持 60 秒迎来黎明。手机和电脑都能玩。
 > *A cozy top-down survivors-like browser game: guard the garden from the mouse horde until dawn.*
 
-## ▶️ [立即开玩 → meow.12121313.xyz](https://meow.12121313.xyz/)
+## ▶️ [立即开玩 → cat.12121313.xyz](https://cat.12121313.xyz/)
 
 备用地址：<https://ora-ora.github.io/cat-jump/>
 
@@ -65,7 +65,7 @@
 浏览器 (Canvas 2D, 原生 JS, 无构建)
    │  HTTPS
    ▼
-Cloudflare Pages ── meow.12121313.xyz（静态资源）
+Cloudflare Pages ── cat.12121313.xyz（静态资源）
    │  API 请求
    ▼
 Cloudflare Worker ── api.12121313.xyz（worker/src.js）
