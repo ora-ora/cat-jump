@@ -1,7 +1,7 @@
 // cat-jump API 代理：只转发游戏用到的 Supabase 接口到 dzarlikttkosqkcfixbx.supabase.co
 // * CORS 只允许游戏站点；按 IP 限流；把真实客户端 IP / 国家码用 HMAC 签名后转发（密钥是 Worker secret PROXY_SECRET，不在仓库里）
 const UPSTREAM = "https://dzarlikttkosqkcfixbx.supabase.co";
-const ORIGINS = ["https://meow.12121313.xyz", "https://ora-ora.github.io", "https://cat-jump-71a.pages.dev"];
+const ORIGINS = ["https://cat.12121313.xyz", "https://meow.12121313.xyz", "https://ora-ora.github.io", "https://cat-jump-71a.pages.dev"];
 const ALLOW = [
   { m: "POST", re: /^\/rest\/v1\/rpc\/(start_run|heartbeat|finish_run|surv_start|surv_finish)$/ },
   { m: "GET", re: /^\/rest\/v1\/(leaderboard_live|surv_board)$/ }
